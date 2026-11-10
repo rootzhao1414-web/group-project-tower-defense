@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>塔防 × AI · Tower Defense</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <h1>🏰 塔防 × AI</h1>
+      <p class="tagline">敌人实时寻路 · 封死通路它们会开始拆塔</p>
+    </header>
+
+    <section class="hud" aria-label="游戏状态">
+      <div class="stat">
+        <span class="stat-label">Money</span>
+        <span class="stat-value" id="money">120</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Lives</span>
+        <span class="stat-value" id="lives">20</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Wave</span>
+        <span class="stat-value" id="wave">0</span>
+      </div>
+      <div class="stat stat-ai">
+        <span class="stat-label">AI 状态</span>
+        <span class="stat-value stat-ai-value" id="ai-status">待命</span>
+      </div>
+    </section>
+
+    <div class="stage">
+      <canvas id="game" width="520" height="520"></canvas>
+      <p class="message" id="message">选一座塔，点空地建造。把路封死，敌人就会改拆塔。</p>
+    </div>
+
+    <footer class="controls">
+      <div class="tower-picker" role="group" aria-label="选择塔类型">
+        <button class="tower-btn is-active" data-tower="gun" type="button">
+          <span class="tower-dot" style="--c:#4cc9f0"></span>
+          <span class="tower-name">机枪塔</span>
+          <span class="tower-cost">30</span>
+        </button>
+        <button class="tower-btn" data-tower="cannon" type="button">
+          <span class="tower-dot" style="--c:#ffe66d"></span>
+          <span class="tower-name">炮台</span>
+          <span class="tower-cost">60</span>
+        </button>
+        <button class="tower-btn" data-tower="frost" type="button">
+          <span class="tower-dot" style="--c:#80ed99"></span>
+          <span class="tower-name">冰塔</span>
+          <span class="tower-cost">50</span>
+        </button>
+      </div>
+      <div class="actions">
+        <button class="btn" id="start" type="button">开始波次</button>
+        <button class="btn btn-ghost" id="restart" type="button">重开</button>
+      </div>
+    </footer>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
