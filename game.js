@@ -1,116 +1,120 @@
 /* ============================================================
- * 塔防 × AI — 初版
+ * game.js — 塔防 · 敌情雷达（v2）
  * ------------------------------------------------------------
- * 框架来源：html5-game-tower-defense（Canvas + 原生 JS，零依赖）
- *
- * 相比原框架新增的「AI」部分：
- *   1. A* 实时寻路 —— 敌人不再是固定路径，每次都重新算到基地的路
- *   2. 拆塔模式   —— 通路被完全封死时，敌人切换状态去拆掉挡路的塔
- *   3. 自适应波次 —— 根据玩家当前战力动态调整数量/血量/速度
+ * 在「塔防 × AI」初版基础上扩展：
+ *   1. 六种炮塔（昵称/定位/造价/对空属性来自设计稿）
+ *   2. 五类敌人（护甲 / 飞行 / BOSS 机制）
+ *   3. 暂停、快捷键、部署简报、敌情雷达实时列表
+ *   4. 视觉与文案对齐设计稿的深蓝霓虹风格
  * ============================================================ */
-
 (() => {
   'use strict';
 
-  // ---------- DOM ----------
-  const canvas = document.getElementById('game');
-  const ctx = canvas.getContext('2d');
-  const $money = document.getElementById('money');
-  const $lives = document.getElementById('lives');
-  const $wave = document.getElementById('wave');
-  const $ai = document.getElementById('ai-status');
-  const $msg = document.getElementById('message');
-  const $start = document.getElementById('start');
-  const $restart = document.getElementById('restart');
-  const $towerBtns = Array.from(document.querySelectorAll('[data-tower]'));
+  const { PALETTE, ENEMY_TYPES, TOWER_TYPES, WAVE_BLUEPRINTS, WAVE_TEMPLATES, UI_TEXT, ICONS } = window.TD;
 
-  // ---------- 常量 ----------
-  const N = 13;                       // 13 x 13 网格
-  const T = canvas.width / N;         // 每格 40px
-  const SPAWN = { c: 0, r: 6 };       // 左侧出生点
-  const BASE = { c: 12, r: 6 };       // 右侧基地
+  /* ============================================================
+   * 零、常量与 DOM
+   * ============================================================ */
+  const COLS = 16;
+  const ROWS = 9;
+  const T = 60;
+  const SPAWN = { c: 0, r: 4 };
+  const BASE = { c: COLS - 1, r: 4 };
   const START_MONEY = 120;
   const START_LIVES = 20;
+  const STEP = 1000 / 60;
+  const MAX_STEPS = 6;
 
-  const TOWER_TYPES = {
-    gun: {
-      name: '机枪塔', cost: 30,
-      range: T * 2.6, rate: 16, dmg: 7,
-      hp: 90, speed: 11, color: '#4cc9f0',
-    },
-    cannon: {
-      name: '炮台', cost: 60,
-      range: T * 3.4, rate: 60, dmg: 26, splash: T * 1.0,
-      hp: 150, speed: 7, color: '#ffe66d',
-    },
-    frost: {
-      name: '冰塔', cost: 50,
-      range: T * 2.4, rate: 32, dmg: 4,
-      slow: 0.45, slowDur: 110,
-      hp: 80, speed: 9, color: '#80ed99',
-    },
-  };
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
 
-  // 八方向：dc, dr, 代价
+  const $ = id => document.getElementById(id);
+  const $money = $('hud-money');
+  const $lives = $('hud-lives');
+  const $wave = $('hud-wave');
+  const $pause = $('btn-pause');
+  const $start = $('btn-start');
+  const $restart = $('btn-restart');
+  const $msg = $('msg');
+  const $deck = $('deck');
+  const $radar = $('radar-list');
+  const $waveTitle = $('wave-title');
+  const $onField = $('on-field');
+  const $spawned = $('spawned');
+  const $spawnBar = $('spawn-bar');
+  const $waveTip = $('wave-tip');
+  const $deployed = $('deployed');
+  const $briefName = $('brief-name');
+  const $briefIcon = $('brief-icon');
+  const $briefTag = $('brief-tag');
+  const $briefDesc = $('brief-desc');
+  const $briefCost = $('brief-cost');
+  const $briefRange = $('brief-range');
+  const $briefAir = $('brief-air');
+  const $tip = $('tip');
+
+  /* ============================================================
+   * 一、状态
+   * ============================================================ */
+  let grid;              // grid[r][c] = 0 空地 / 1 塔
+  let towers = [];
+  let enemies = [];
+  let bullets = [];
+  let zaps;              // 雷霆线圈的闪电特效
+  let beams;             // 狙击塔的光束特效
+  let particles;         // 命中/爆炸粒子
+  let money;
+  let lives;
+  let wave;
+  let running;
+  let over;
+  let paused;
+  let selectedType;
+  let hoverCell;
+  let pathDirty;
+  let spawnQueue;        // 待出场的敌人 id 列表
+  let spawnTimer;
+  let waveCfg;
+  let appeared;          // 本波已出现数量
+  let totalThisWave;     // 本波总数
+
+  /* ============================================================
+   * 二、小工具
+   * ============================================================ */
+  const cx = c => c * T + T / 2;
+  const cy = r => r * T + T / 2;
+  const inBounds = (c, r) => c >= 0 && c < COLS && r >= 0 && r < ROWS;
+  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  const msg = t => { $msg.textContent = t; };
+  const rand = (a, b) => a + Math.random() * (b - a);
+
   const DIRS8 = [
     [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
     [1, 1, Math.SQRT2], [1, -1, Math.SQRT2],
     [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2],
   ];
 
-  // ---------- 状态 ----------
-  let grid;
-  let towers;
-  let enemies;
-  let bullets;
-  let money;
-  let lives;
-  let wave;
-  let running;
-  let over;
-  let selectedType;
-  let hoverCell;
-  let gridVersion;
-  let pathDirty;
-  let spawnQueue;
-  let spawnTimer;
-  let waveCfg;
-
-  // ---------- 小工具 ----------
-  const cx = c => c * T + T / 2;
-  const cy = r => r * T + T / 2;
-  const inBounds = (c, r) => c >= 0 && c < N && r >= 0 && r < N;
-  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
-  const msg = t => { $msg.textContent = t; };
-
   /* ============================================================
-   * 一、A* 寻路（AI 核心）
+   * 三、A* 寻路（沿用初版核心，适配 16×9）
    * ============================================================ */
-
-  // 对角距离启发函数（octile distance）
   function heuristic(c, r) {
     const dx = Math.abs(c - BASE.c);
     const dy = Math.abs(r - BASE.r);
     return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
   }
 
-  // 返回从 (sc,sr) 到基地的格子路径；无路可走返回 null
   function findPath(sc, sr) {
     if (!inBounds(sc, sr)) return null;
     if (sc === BASE.c && sr === BASE.r) return [{ c: sc, r: sr }];
 
-    const startKey = sc + ',' + sr;
     const open = [{ c: sc, r: sr, g: 0, f: heuristic(sc, sr) }];
-    const bestG = new Map([[startKey, 0]]);
+    const bestG = new Map([[sc + ',' + sr, 0]]);
     const cameFrom = new Map();
     const closed = new Set();
 
     while (open.length) {
-      // 取 f 最小的节点（13x13 规模小，线性扫描足够）
       let bi = 0;
-      for (let i = 1; i < open.length; i++) {
-        if (open[i].f < open[bi].f) bi = i;
-      }
+      for (let i = 1; i < open.length; i++) if (open[i].f < open[bi].f) bi = i;
       const cur = open.splice(bi, 1)[0];
       const curKey = cur.c + ',' + cur.r;
       if (closed.has(curKey)) continue;
@@ -120,28 +124,22 @@
         const path = [];
         let k = curKey;
         while (k) {
-          const parts = k.split(',');
-          path.push({ c: +parts[0], r: +parts[1] });
+          const p = k.split(',');
+          path.push({ c: +p[0], r: +p[1] });
           k = cameFrom.get(k);
         }
         return path.reverse();
       }
 
-      for (let i = 0; i < DIRS8.length; i++) {
-        const dc = DIRS8[i][0];
-        const dr = DIRS8[i][1];
-        const stepCost = DIRS8[i][2];
+      for (const [dc, dr, cost] of DIRS8) {
         const nc = cur.c + dc;
         const nr = cur.r + dr;
         if (!inBounds(nc, nr)) continue;
-        if (grid[nr][nc] === 1) continue;                 // 塔 = 障碍
-        if (dc !== 0 && dr !== 0) {
-          // 对角移动不能穿过两个塔之间的墙角
-          if (grid[cur.r][nc] === 1 || grid[nr][cur.c] === 1) continue;
-        }
+        if (grid[nr][nc] === 1) continue;
+        if (dc !== 0 && dr !== 0 && (grid[cur.r][nc] === 1 || grid[nr][cur.c] === 1)) continue;
         const nKey = nc + ',' + nr;
         if (closed.has(nKey)) continue;
-        const ng = cur.g + stepCost;
+        const ng = cur.g + cost;
         if (bestG.has(nKey) && ng >= bestG.get(nKey)) continue;
         bestG.set(nKey, ng);
         cameFrom.set(nKey, curKey);
@@ -152,8 +150,38 @@
   }
 
   /* ============================================================
-   * 二、敌人 AI
+   * 四、敌人
    * ============================================================ */
+  function enemyStats(type, hpMul, speedMul) {
+    return {
+      hp: Math.round(type.hp * hpMul),
+      speed: type.speed * speedMul,
+    };
+  }
+
+  function spawnEnemy(typeId) {
+    const type = ENEMY_TYPES[typeId];
+    const st = enemyStats(type, waveCfg ? waveCfg.hpMul : 1, waveCfg ? waveCfg.speedMul : 1);
+    const e = {
+      type, x: cx(SPAWN.c), y: cy(SPAWN.r),
+      hp: st.hp, maxHp: st.hp,
+      speed: st.speed,
+      armor: type.armor,
+      flying: type.flying,
+      r: type.radius,
+      state: 'march',
+      path: null, pi: 0,
+      slowT: 0,
+      target: null,
+      atkCd: 0,
+      hitFlash: 0,
+      angle: 0,
+      dead: false,
+    };
+    if (!type.flying) rePath(e);
+    enemies.push(e);
+    appeared++;
+  }
 
   function nearestTower(e) {
     let best = null;
@@ -166,15 +194,14 @@
     return best;
   }
 
-  // 重新规划：有路就继续走，没路就进入「拆塔」状态
   function rePath(e) {
-    const c = clamp(Math.floor(e.x / T), 0, N - 1);
-    const r = clamp(Math.floor(e.y / T), 0, N - 1);
+    if (e.flying) return;
+    const c = clamp(Math.floor(e.x / T), 0, COLS - 1);
+    const r = clamp(Math.floor(e.y / T), 0, ROWS - 1);
     const path = findPath(c, r);
-
     if (path) {
       e.path = path;
-      e.pi = 1;
+      e.pi = Math.min(1, path.length - 1);
       e.state = 'march';
       e.target = null;
     } else {
@@ -185,51 +212,34 @@
     }
   }
 
-  function spawnEnemy(cfg) {
-    const enemy = {
-      x: cx(SPAWN.c),
-      y: cy(SPAWN.r),
-      hp: cfg.hp,
-      maxHp: cfg.hp,
-      speed: cfg.speed,
-      r: 9 + Math.min(3, wave * 0.15),
-      state: 'march',
-      path: null,
-      pi: 0,
-      slowT: 0,
-      target: null,
-      atkCd: 0,
-      dead: false,
-    };
-    rePath(enemy);
-    enemies.push(enemy);
-  }
-
-  function arriveBase(e) {
+  function damageEnemy(e, rawDmg, opts = {}) {
     if (e.dead) return;
-    e.dead = true;
-    lives--;
-    msg('⚠ 敌人突破防线！');
+    const armor = opts.pierceArmor ? 0 : e.armor;
+    const dmg = Math.max(1, rawDmg - armor);
+    e.hp -= dmg;
+    e.hitFlash = 6;
+    if (dmg > 0) addParticles(e.x, e.y, e.type.color, 2);
+    if (e.hp <= 0) {
+      e.dead = true;
+      money += e.type.reward;
+      addParticles(e.x, e.y, e.type.color, e.type.boss ? 26 : 8);
+      if (e.type.boss) msg(`☠ 深渊巨像倒下了！+${e.type.reward}`);
+    }
   }
 
   function updateEnemyAttack(e) {
     if (!e.target || e.target.dead) {
       e.target = nearestTower(e);
-      if (!e.target) {
-        rePath(e);
-        return;
-      }
+      if (!e.target) { rePath(e); return; }
     }
-
     const t = e.target;
     const dx = t.x - e.x;
     const dy = t.y - e.y;
     const d = Math.hypot(dx, dy) || 1;
-    const reach = T * 0.95;
+    const reach = T * 0.92;
 
     if (d > reach) {
-      const step = e.speed * 0.8 * (e.slowT > 0 ? 0.5 : 1);
-      const move = Math.min(step, d - reach);
+      const move = Math.min(e.speed / 60 * 0.9, d - reach);
       e.x += (dx / d) * move;
       e.y += (dy / d) * move;
     } else {
@@ -237,6 +247,7 @@
       if (e.atkCd <= 0) {
         e.atkCd = 38;
         t.hp -= 7;
+        addParticles(t.x, t.y, PALETTE.danger, 3);
         if (t.hp <= 0) destroyTower(t);
       }
     }
@@ -245,17 +256,27 @@
   function updateEnemies() {
     for (const e of enemies) {
       if (e.dead) continue;
+      if (e.hitFlash > 0) e.hitFlash--;
       if (e.slowT > 0) e.slowT--;
 
-      if (e.state === 'attack') {
-        updateEnemyAttack(e);
+      if (e.state === 'attack') { updateEnemyAttack(e); continue; }
+
+      // 飞行单位：无视地形，直线扑向基地
+      if (e.flying) {
+        const bx = cx(BASE.c);
+        const by = cy(BASE.r);
+        const dx = bx - e.x;
+        const dy = by - e.y;
+        const d = Math.hypot(dx, dy);
+        const step = e.speed / 60 * (e.slowT > 0 ? 0.55 : 1);
+        e.angle = Math.atan2(dy, dx);
+        if (d <= step + 6) { arriveBase(e); continue; }
+        e.x += (dx / d) * step;
+        e.y += (dy / d) * step;
         continue;
       }
 
-      if (!e.path || e.pi >= e.path.length) {
-        arriveBase(e);
-        continue;
-      }
+      if (!e.path || e.pi >= e.path.length) { arriveBase(e); continue; }
 
       const node = e.path[e.pi];
       const tx = cx(node.c);
@@ -263,11 +284,11 @@
       const dx = tx - e.x;
       const dy = ty - e.y;
       const d = Math.hypot(dx, dy);
-      const step = e.speed * (e.slowT > 0 ? 0.5 : 1);
+      const step = e.speed / 60 * (e.slowT > 0 ? 0.45 : 1);
+      e.angle = Math.atan2(dy, dx);
 
       if (d <= step) {
-        e.x = tx;
-        e.y = ty;
+        e.x = tx; e.y = ty;
         e.pi++;
         if (e.pi >= e.path.length) arriveBase(e);
       } else {
@@ -277,99 +298,136 @@
     }
   }
 
-  /* ============================================================
-   * 三、塔与子弹
-   * ============================================================ */
+  function arriveBase(e) {
+    if (e.dead) return;
+    e.dead = true;
+    lives -= e.type.boss ? 3 : 1;
+    addParticles(cx(BASE.c), cy(BASE.r), PALETTE.danger, 10);
+    msg(e.type.boss ? '💥 巨像撞穿基地！生命 -3' : '⚠ 敌人突破防线！');
+  }
 
+  /* ============================================================
+   * 五、炮塔
+   * ============================================================ */
   function pickTarget(t) {
     let best = null;
     let bestScore = -Infinity;
     for (const e of enemies) {
       if (e.dead) continue;
+      if (e.flying && !t.type.air) continue;
       const d = Math.hypot(e.x - t.x, e.y - t.y);
-      if (d > t.type.range) continue;
-      // 打分：离基地越近的敌人越优先
+      if (d > t.type.range * T) continue;
+      // 优先打离基地最近的
       const score = -Math.hypot(e.x - cx(BASE.c), e.y - cy(BASE.r));
       if (score > bestScore) { bestScore = score; best = e; }
     }
     return best;
   }
 
-  function fire(t, target) {
-    bullets.push({
-      x: t.x,
-      y: t.y,
+  function towerFire(t, target) {
+    const ty = t.type;
+
+    if (ty.id === 'sniper') {
+      damageEnemy(target, ty.dmg, { pierceArmor: true });
+      beams.push({ x1: t.x, y1: t.y, x2: target.x, y2: target.y, life: 8, max: 8 });
+      t.angle = Math.atan2(target.y - t.y, target.x - t.x);
+      return;
+    }
+
+    if (ty.id === 'tesla') {
+      const visited = new Set([target]);
+      let cur = target;
+      let dmg = ty.dmg;
+      let px = t.x;
+      let py = t.y;
+      for (let i = 0; i < ty.chain; i++) {
+        damageEnemy(cur, dmg);
+        zaps.push({ x1: px, y1: py, x2: cur.x, y2: cur.y, life: 6, max: 6 });
+        px = cur.x; py = cur.y;
+        dmg *= ty.chainFalloff[i] || 0.4;
+        let next = null;
+        let bestD = Infinity;
+        for (const e of enemies) {
+          if (e.dead || visited.has(e)) continue;
+          if (e.flying && !ty.air) continue;
+          const d = Math.hypot(e.x - cur.x, e.y - cur.y);
+          if (d < T * 1.8 && d < bestD) { bestD = d; next = e; }
+        }
+        if (!next) break;
+        visited.add(next);
+        cur = next;
+      }
+      return;
+    }
+
+    const b = {
+      x: t.x, y: t.y,
       target,
-      dmg: t.type.dmg,
-      speed: t.type.speed,
-      color: t.type.color,
-      splash: t.type.splash || 0,
-      slow: t.type.slow || 0,
-      slowDur: t.type.slowDur || 0,
+      dmg: ty.dmg,
+      speed: 6,
+      color: ty.color,
+      splash: ty.splash ? ty.splash * T : 0,
+      slow: ty.slow || 0,
+      slowDur: ty.slowDur || 0,
+      pierceArmor: ty.pierceArmor || false,
+      kind: ty.id,
+      angle: 0,
       done: false,
-    });
+    };
+    bullets.push(b);
+    t.angle = Math.atan2(target.y - t.y, target.x - t.x);
   }
 
   function updateTowers() {
     for (const t of towers) {
       if (t.dead) continue;
+      const ty = t.type;
+
+      // 地雷：持续光环
+      if (ty.id === 'mine') {
+        if (t.auraT > 0) {
+          t.auraT--;
+          if (t.auraT % ty.aura.tick === 0) {
+            for (const e of enemies) {
+              if (e.dead || e.flying) continue;
+              if (Math.hypot(e.x - t.x, e.y - t.y) <= ty.aura.radius * T) {
+                damageEnemy(e, ty.dmg);
+              }
+            }
+            addParticles(t.x, t.y, ty.color, 3);
+          }
+          continue;
+        }
+        if (t.cd > 0) { t.cd--; continue; }
+        const near = enemies.some(e => !e.dead && !e.flying &&
+          Math.hypot(e.x - t.x, e.y - t.y) <= ty.range * T);
+        if (near) {
+          t.auraT = ty.aura.duration;
+          t.cd = ty.rate + ty.aura.duration;
+          msg('⚡ 磁暴地雷引爆');
+        }
+        continue;
+      }
+
       if (t.cd > 0) { t.cd--; continue; }
       const target = pickTarget(t);
-      if (target) {
-        t.cd = t.type.rate;
-        fire(t, target);
-      }
-    }
-  }
-
-  function hitEnemy(e, dmg, b) {
-    if (e.dead) return;
-    e.hp -= dmg;
-    if (b.slow) e.slowT = b.slowDur;
-
-    if (b.splash > 0) {
-      for (const o of enemies) {
-        if (o === e || o.dead) continue;
-        if (Math.hypot(o.x - e.x, o.y - e.y) <= b.splash) o.hp -= dmg * 0.5;
-      }
-    }
-
-    if (e.hp <= 0) {
-      e.dead = true;
-      money += 6 + Math.floor(wave * 1.5);
-    }
-  }
-
-  function updateBullets() {
-    for (const b of bullets) {
-      if (b.done) continue;
-      if (!b.target || b.target.dead) { b.done = true; continue; }
-
-      const dx = b.target.x - b.x;
-      const dy = b.target.y - b.y;
-      const d = Math.hypot(dx, dy) || 1;
-
-      if (d < 8) {
-        hitEnemy(b.target, b.dmg, b);
-        b.done = true;
-      } else {
-        b.x += (dx / d) * b.speed;
-        b.y += (dy / d) * b.speed;
-      }
+      if (!target) continue;
+      t.cd = ty.rate;
+      towerFire(t, target);
     }
   }
 
   function buildTower(c, r) {
+    if (!selectedType) { msg('先在右侧选择一种炮塔'); return; }
     if (!inBounds(c, r)) return;
     if (c === SPAWN.c && r === SPAWN.r) { msg('不能建在出生点上'); return; }
     if (c === BASE.c && r === BASE.r) { msg('不能建在基地上'); return; }
     if (grid[r][c] !== 0) { msg('这里已经有一座塔了'); return; }
 
     for (const e of enemies) {
-      if (e.dead) continue;
-      if (Math.floor(e.x / T) === c && Math.floor(e.y / T) === r) {
-        msg('敌人正在这格，等它走开');
-        return;
+      if (!e.dead && !e.flying &&
+        Math.floor(e.y / T) === r && Math.floor(e.x / T) === c) {
+        msg('敌人正在这格，等它走开'); return;
       }
     }
 
@@ -378,97 +436,167 @@
 
     money -= type.cost;
     grid[r][c] = 1;
-    gridVersion++;
     pathDirty = true;
 
     towers.push({
       c, r,
-      x: cx(c),
-      y: cy(r),
+      x: cx(c), y: cy(r),
       type,
-      hp: type.hp,
-      maxHp: type.hp,
+      hp: type.hp, maxHp: type.hp,
       cd: 0,
+      angle: -Math.PI / 2,
+      auraT: 0,
       dead: false,
     });
 
     if (!findPath(SPAWN.c, SPAWN.r)) {
       msg('🚫 所有通路被封死 —— 敌人开始拆塔');
     } else {
-      msg(`建好 ${type.name}`);
+      msg(`部署完成：${type.name}（${type.tag}）`);
     }
+    refreshDeck();
   }
 
   function destroyTower(t) {
     t.dead = true;
     grid[t.r][t.c] = 0;
-    gridVersion++;
     pathDirty = true;
-    msg('💥 一座塔被摧毁');
+    addParticles(t.x, t.y, PALETTE.danger, 12);
+    msg('💥 一座炮塔被摧毁');
+    refreshDeck();
   }
 
   /* ============================================================
-   * 四、波次（自适应）
+   * 六、子弹与特效
    * ============================================================ */
+  function updateBullets() {
+    for (const b of bullets) {
+      if (b.done) continue;
+      if (!b.target || b.target.dead) { b.done = true; continue; }
 
-  function makeWaveConfig(w) {
-    // 战力评估：塔数量 + 总输出 + 存款 + 剩余生命
+      const dx = b.target.x - b.x;
+      const dy = b.target.y - b.y;
+      const d = Math.hypot(dx, dy) || 1;
+      b.angle = Math.atan2(dy, dx);
+
+      if (d < 9) {
+        damageEnemy(b.target, b.dmg, { pierceArmor: b.pierceArmor });
+        if (b.slow) b.target.slowT = b.slowDur;
+        if (b.splash > 0) {
+          for (const o of enemies) {
+            if (o === b.target || o.dead || o.flying) continue;
+            if (Math.hypot(o.x - b.target.x, o.y - b.target.y) <= b.splash) {
+              damageEnemy(o, b.dmg * 0.5);
+            }
+          }
+          addParticles(b.x, b.y, b.color, 6);
+        }
+        b.done = true;
+      } else {
+        b.x += (dx / d) * b.speed;
+        b.y += (dy / d) * b.speed;
+      }
+    }
+  }
+
+  function addParticles(x, y, color, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = rand(0.6, 3.4);
+      particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        life: rand(18, 34), max: 34, color, r: rand(1, 2.4),
+      });
+    }
+  }
+
+  function updateEffects() {
+    for (const p of particles) {
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.94; p.vy *= 0.94;
+      p.life--;
+    }
+    particles = particles.filter(p => p.life > 0);
+    for (const z of zaps) z.life--;
+    zaps = zaps.filter(z => z.life > 0);
+    for (const b of beams) b.life--;
+    beams = beams.filter(b => b.life > 0);
+  }
+
+  /* ============================================================
+   * 七、波次
+   * ============================================================ */
+  function currentPower() {
     let dps = 0;
     for (const t of towers) {
       if (t.dead) continue;
       dps += t.type.dmg / t.type.rate;
     }
-    // dps 是「每帧伤害」，先换算成「每秒伤害」，数值才符合直觉
-    const power = towers.length * 6 + dps * 60 * 1.2 + money * 0.08 + lives * 0.4;
+    return towers.length * 6 + dps * 60 * 1.1 + money * 0.06 + lives * 0.35;
+  }
 
-    // 0 ~ 1 的压力系数：玩家越强，波次越凶
+  function buildWave(w) {
+    const bp = w <= WAVE_BLUEPRINTS.length
+      ? WAVE_BLUEPRINTS[w - 1]
+      : { title: `${WAVE_BLUEPRINTS[(w - 1) % 6].title} · 强化`, tip: '强度提升，注意补防空。', units: WAVE_TEMPLATES[(w - 1) % 6] };
+
+    const power = currentPower();
     const pressure = clamp((power - 40) / 220, 0, 1);
+    const hpMul = (1 + (w - 1) * 0.1) * (1 + pressure * 0.5);
+    const speedMul = 1 + (w - 1) * 0.012 + pressure * 0.1;
 
-    return {
-      count: Math.round(5 + w * 1.7 + pressure * 5),
-      hp: Math.round(16 + w * 6 + pressure * 34),
-      speed: 0.9 + w * 0.025 + pressure * 0.18,
-      pressure,
-    };
+    const units = [];
+    for (const [id, n] of bp.units) {
+      const count = Math.max(1, Math.round(n * (1 + (w - 1) * 0.04) * (1 + pressure * 0.35)));
+      for (let i = 0; i < count; i++) units.push(id);
+    }
+    // 洗牌，让出怪顺序有变化
+    for (let i = units.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [units[i], units[j]] = [units[j], units[i]];
+    }
+
+    return { title: bp.title, tip: bp.tip, units, hpMul, speedMul, pressure };
   }
 
   function startWave() {
     if (over || running) return;
     wave++;
-    waveCfg = makeWaveConfig(wave);
-    spawnQueue = waveCfg.count;
-    spawnTimer = 20;
+    waveCfg = buildWave(wave);
+    spawnQueue = waveCfg.units.slice();
+    totalThisWave = spawnQueue.length;
+    appeared = 0;
+    spawnTimer = 24;
     running = true;
+    paused = false;
+    $pause.classList.remove('is-on');
+    $pause.textContent = '暂停';
     $start.disabled = true;
-    msg(`第 ${wave} 波来袭 · 敌方强度 ${Math.round(waveCfg.pressure * 100)}%`);
+    msg(`第 ${wave} 波 · ${waveCfg.title} 来袭（强度 ${Math.round(waveCfg.pressure * 100)}%）`);
+    refreshWavePanel();
   }
 
   /* ============================================================
-   * 五、主循环
+   * 八、主循环
    * ============================================================ */
-
   function update() {
-    // 地形变化（建塔/拆塔）→ 所有行进中的敌人重新寻路
     if (pathDirty) {
       pathDirty = false;
-      for (const e of enemies) {
-        if (!e.dead && e.state === 'march') rePath(e);
-      }
+      for (const e of enemies) if (!e.dead && e.state === 'march') rePath(e);
     }
 
-    // 出怪
-    if (spawnQueue > 0) {
+    if (spawnQueue.length) {
       spawnTimer--;
       if (spawnTimer <= 0) {
-        spawnTimer = 34;
-        spawnQueue--;
-        spawnEnemy(waveCfg);
+        spawnTimer = Math.max(16, 34 - wave * 2);
+        spawnEnemy(spawnQueue.shift());
       }
     }
 
     updateEnemies();
     updateTowers();
     updateBullets();
+    updateEffects();
 
     enemies = enemies.filter(e => !e.dead);
     bullets = bullets.filter(b => !b.done);
@@ -481,88 +609,83 @@
       msg('💥 基地陷落，游戏结束');
     }
 
-    if (running && !over && spawnQueue === 0 && enemies.length === 0) {
+    if (running && !over && !spawnQueue.length && !enemies.length) {
       running = false;
       $start.disabled = false;
-      const bonus = 10 + wave * 4;
+      const bonus = 12 + wave * 4;
       money += bonus;
       msg(`✅ 第 ${wave} 波清除，奖励 +${bonus}`);
+      refreshWavePanel();
     }
   }
 
   /* ============================================================
-   * 六、渲染
+   * 九、渲染
    * ============================================================ */
-
   function drawGrid() {
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.strokeStyle = PALETTE.grid;
     ctx.lineWidth = 1;
-    for (let i = 0; i <= N; i++) {
-      ctx.beginPath();
-      ctx.moveTo(i * T, 0);
-      ctx.lineTo(i * T, canvas.height);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(0, i * T);
-      ctx.lineTo(canvas.width, i * T);
-      ctx.stroke();
+    ctx.beginPath();
+    for (let i = 0; i <= COLS; i++) {
+      ctx.moveTo(i * T + 0.5, 0);
+      ctx.lineTo(i * T + 0.5, ROWS * T);
     }
+    for (let j = 0; j <= ROWS; j++) {
+      ctx.moveTo(0, j * T + 0.5);
+      ctx.lineTo(COLS * T, j * T + 0.5);
+    }
+    ctx.stroke();
   }
 
-  // 把每个敌人当前的 A* 路径画出来 —— 让「AI 在想什么」变得可见
   function drawPaths() {
-    ctx.setLineDash([4, 7]);
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = 'rgba(255,94,126,0.16)';
+    ctx.setLineDash([4, 8]);
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = PALETTE.path;
     for (const e of enemies) {
-      if (e.dead || e.state !== 'march' || !e.path) continue;
+      if (e.dead || e.state !== 'march' || e.flying || !e.path) continue;
       ctx.beginPath();
       ctx.moveTo(e.x, e.y);
-      for (let i = e.pi; i < e.path.length; i++) {
-        ctx.lineTo(cx(e.path[i].c), cy(e.path[i].r));
-      }
+      for (let i = e.pi; i < e.path.length; i++) ctx.lineTo(cx(e.path[i].c), cy(e.path[i].r));
       ctx.stroke();
     }
     ctx.setLineDash([]);
   }
 
-  function drawSpawn() {
-    const x = cx(SPAWN.c);
-    const y = cy(SPAWN.r);
+  function drawSpawnAndBase() {
+    // 出生点
+    const sx = cx(SPAWN.c);
+    const sy = cy(SPAWN.r);
     ctx.save();
-    ctx.shadowBlur = 12;
-    ctx.shadowColor = '#ff5e7e';
-    ctx.strokeStyle = 'rgba(255,94,126,0.7)';
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = PALETTE.danger;
+    ctx.strokeStyle = 'rgba(255,94,126,0.72)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(x, y, T * 0.3, 0, Math.PI * 2);
+    ctx.arc(sx, sy, T * 0.3, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
-  }
 
-  function drawBase() {
-    const x = cx(BASE.c);
-    const y = cy(BASE.r);
+    // 基地
+    const bx = cx(BASE.c);
+    const by = cy(BASE.r);
     const pulse = 1 + Math.sin(performance.now() / 380) * 0.07;
-
     ctx.save();
-    ctx.shadowBlur = 18;
-    ctx.shadowColor = '#80ed99';
-    ctx.fillStyle = '#80ed99';
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = PALETTE.heal;
+    ctx.fillStyle = PALETTE.heal;
     ctx.beginPath();
-    ctx.arc(x, y, T * 0.36 * pulse, 0, Math.PI * 2);
+    ctx.arc(bx, by, T * 0.34 * pulse, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
-
-    ctx.fillStyle = '#0d1530';
+    ctx.fillStyle = '#06101f';
     ctx.font = 'bold 13px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('B', x, y);
+    ctx.fillText('B', bx, by);
   }
 
   function drawHover() {
-    if (!hoverCell || over) return;
+    if (!hoverCell || over || !selectedType) return;
     const { c, r } = hoverCell;
     const type = TOWER_TYPES[selectedType];
     const canBuild = grid[r][c] === 0
@@ -570,69 +693,246 @@
       && !(c === BASE.c && r === BASE.r)
       && money >= type.cost;
 
-    ctx.fillStyle = canBuild ? 'rgba(76,201,240,0.14)' : 'rgba(255,94,126,0.12)';
+    ctx.fillStyle = canBuild ? 'rgba(63,224,255,0.12)' : 'rgba(255,94,126,0.12)';
     ctx.fillRect(c * T, r * T, T, T);
 
     if (canBuild) {
-      ctx.strokeStyle = 'rgba(76,201,240,0.35)';
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(63,224,255,0.38)';
+      ctx.lineWidth = 1.4;
       ctx.setLineDash([5, 5]);
       ctx.beginPath();
-      ctx.arc(cx(c), cy(r), type.range, 0, Math.PI * 2);
+      ctx.arc(cx(c), cy(r), type.range * T, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
     }
   }
 
-  function drawTower(t) {
+  function towerGlyph(type, x, y, angle) {
     ctx.save();
-    ctx.shadowBlur = 12;
-    ctx.shadowColor = t.type.color;
-    ctx.fillStyle = t.type.color;
+    ctx.translate(x, y);
+    ctx.rotate(angle || 0);
+    ctx.strokeStyle = type.color;
+    ctx.fillStyle = type.color;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+
+    switch (type.icon) {
+      case 'dart': {
+        ctx.beginPath();
+        ctx.moveTo(-7, 0); ctx.lineTo(7, 0);
+        ctx.moveTo(2, -5); ctx.lineTo(7, 0); ctx.lineTo(2, 5);
+        ctx.stroke();
+        break;
+      }
+      case 'cannon': {
+        ctx.beginPath();
+        ctx.arc(0, 0, 6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, 0); ctx.lineTo(11, 0);
+        ctx.lineWidth = 3.4;
+        ctx.stroke();
+        break;
+      }
+      case 'frost': {
+        for (let i = 0; i < 3; i++) {
+          const a = (Math.PI / 3) * i;
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * -7, Math.sin(a) * -7);
+          ctx.lineTo(Math.cos(a) * 7, Math.sin(a) * 7);
+          ctx.stroke();
+        }
+        break;
+      }
+      case 'tesla': {
+        ctx.beginPath();
+        ctx.moveTo(-4, 6); ctx.lineTo(0, -2); ctx.lineTo(4, 6);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, -3, 2.4, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      }
+      case 'sniper': {
+        ctx.beginPath();
+        ctx.arc(0, 0, 7, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, -7); ctx.lineTo(0, 7);
+        ctx.moveTo(-7, 0); ctx.lineTo(7, 0);
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        break;
+      }
+      case 'mine': {
+        ctx.beginPath();
+        ctx.arc(0, 0, 6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, -6); ctx.lineTo(0, -10);
+        ctx.moveTo(-4, 3); ctx.lineTo(4, 3);
+        ctx.stroke();
+        break;
+      }
+      default: {
+        ctx.beginPath();
+        ctx.arc(0, 0, 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawTower(t) {
+    const ty = t.type;
+
+    ctx.save();
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = ty.color;
+    ctx.fillStyle = 'rgba(6,16,31,0.9)';
+    ctx.strokeStyle = ty.color;
+    ctx.lineWidth = 1.6;
     ctx.beginPath();
     ctx.arc(t.x, t.y, T * 0.3, 0, Math.PI * 2);
     ctx.fill();
+    ctx.stroke();
     ctx.restore();
 
-    ctx.fillStyle = '#0d1530';
-    ctx.beginPath();
-    ctx.arc(t.x, t.y, T * 0.13, 0, Math.PI * 2);
-    ctx.fill();
+    towerGlyph(ty, t.x, t.y, t.angle);
+
+    // 地雷光环
+    if (ty.id === 'mine') {
+      const active = t.auraT > 0;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, ty.range * T, 0, Math.PI * 2);
+      ctx.strokeStyle = active ? 'rgba(180,140,255,0.55)' : 'rgba(180,140,255,0.18)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 6]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (active) {
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, ty.aura.radius * T, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(180,140,255,0.07)';
+        ctx.fill();
+      }
+    }
 
     if (t.hp < t.maxHp) {
       const w = T * 0.62;
       const bx = t.x - w / 2;
       const by = t.y + T * 0.36;
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
       ctx.fillRect(bx, by, w, 4);
-      ctx.fillStyle = '#ff5e7e';
+      ctx.fillStyle = PALETTE.danger;
       ctx.fillRect(bx, by, w * Math.max(0, t.hp / t.maxHp), 4);
     }
   }
 
-  function drawEnemy(e) {
-    const slowed = e.slowT > 0;
-
+  function enemyShape(e) {
+    const type = e.type;
+    const x = e.x;
+    const y = e.y;
+    const r = e.r;
     ctx.save();
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = slowed ? '#80ed99' : '#ff5e7e';
-    ctx.fillStyle = slowed ? '#8fe3a5' : '#ff5e7e';
+    ctx.translate(x, y);
+    ctx.fillStyle = e.hitFlash > 0 ? '#ffffff' : type.color;
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 1.2;
+
+    switch (type.icon) {
+      case 'skull': {
+        ctx.beginPath();
+        ctx.arc(0, 0, r, Math.PI, 0);
+        ctx.lineTo(r * 0.7, r * 0.85);
+        ctx.lineTo(-r * 0.7, r * 0.85);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#06101f';
+        ctx.beginPath();
+        ctx.arc(-r * 0.35, -r * 0.1, r * 0.22, 0, Math.PI * 2);
+        ctx.arc(r * 0.35, -r * 0.1, r * 0.22, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      }
+      case 'shield': {
+        ctx.beginPath();
+        ctx.moveTo(0, -r);
+        ctx.lineTo(r * 0.85, -r * 0.4);
+        ctx.lineTo(r * 0.85, r * 0.3);
+        ctx.quadraticCurveTo(r * 0.5, r * 0.95, 0, r);
+        ctx.quadraticCurveTo(-r * 0.5, r * 0.95, -r * 0.85, r * 0.3);
+        ctx.lineTo(-r * 0.85, -r * 0.4);
+        ctx.closePath();
+        ctx.fill();
+        break;
+      }
+      case 'bolt': {
+        ctx.beginPath();
+        ctx.moveTo(r * 0.35, -r);
+        ctx.lineTo(-r * 0.55, r * 0.1);
+        ctx.lineTo(0, r * 0.1);
+        ctx.lineTo(-r * 0.3, r);
+        ctx.lineTo(r * 0.6, -r * 0.15);
+        ctx.lineTo(r * 0.05, -r * 0.15);
+        ctx.closePath();
+        ctx.fill();
+        break;
+      }
+      case 'wing': {
+        ctx.beginPath();
+        ctx.ellipse(-r * 0.55, 0, r * 0.6, r * 0.34, -0.3, 0, Math.PI * 2);
+        ctx.ellipse(r * 0.55, 0, r * 0.6, r * 0.34, 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.42, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      }
+      default: {
+        ctx.beginPath();
+        ctx.moveTo(0, -r);
+        ctx.quadraticCurveTo(r, -r * 0.2, r * 0.7, r * 0.7);
+        ctx.lineTo(r * 0.25, r * 0.35);
+        ctx.lineTo(0, r * 0.8);
+        ctx.lineTo(-r * 0.25, r * 0.35);
+        ctx.lineTo(-r * 0.7, r * 0.7);
+        ctx.quadraticCurveTo(-r, -r * 0.2, 0, -r);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawEnemy(e) {
+    // 落地阴影（飞行单位更高）
+    ctx.save();
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = '#000';
     ctx.beginPath();
-    ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
+    ctx.ellipse(e.x, e.y + (e.flying ? 14 : e.r * 0.9), e.r * 0.8, e.r * 0.28, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    const w = 22;
+    ctx.save();
+    ctx.shadowBlur = e.type.boss ? 24 : 10;
+    ctx.shadowColor = e.type.color;
+    enemyShape(e);
+    ctx.restore();
+
+    // 血条
+    const w = e.type.boss ? 44 : 24;
     const bx = e.x - w / 2;
-    const by = e.y - e.r - 8;
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    const by = e.y - e.r - (e.flying ? 10 : 8);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(bx, by, w, 3);
-    ctx.fillStyle = '#80ed99';
+    ctx.fillStyle = e.slowT > 0 ? PALETTE.accent : PALETTE.heal;
     ctx.fillRect(bx, by, w * Math.max(0, e.hp / e.maxHp), 3);
 
+    // 拆塔标记
     if (e.state === 'attack') {
-      ctx.fillStyle = '#ffe66d';
-      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.fillStyle = PALETTE.warn;
+      ctx.font = 'bold 11px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'bottom';
       ctx.fillText('⚔', e.x, by - 3);
@@ -640,68 +940,225 @@
   }
 
   function drawBullet(b) {
-    ctx.fillStyle = b.color;
+    const len = 8;
+    ctx.save();
+    ctx.strokeStyle = b.color;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = b.color;
     ctx.beginPath();
-    ctx.arc(b.x, b.y, 2.6, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(b.x - Math.cos(b.angle) * len, b.y - Math.sin(b.angle) * len);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawEffects() {
+    for (const z of zaps) {
+      ctx.save();
+      ctx.globalAlpha = z.life / z.max;
+      ctx.strokeStyle = '#a8c6ff';
+      ctx.lineWidth = 1.8;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = '#8fb0ff';
+      ctx.beginPath();
+      ctx.moveTo(z.x1, z.y1);
+      const seg = 4;
+      for (let i = 1; i < seg; i++) {
+        const t2 = i / seg;
+        ctx.lineTo(
+          z.x1 + (z.x2 - z.x1) * t2 + rand(-5, 5),
+          z.y1 + (z.y2 - z.y1) * t2 + rand(-5, 5),
+        );
+      }
+      ctx.lineTo(z.x2, z.y2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    for (const b of beams) {
+      ctx.save();
+      ctx.globalAlpha = b.life / b.max;
+      ctx.strokeStyle = '#ff8fa0';
+      ctx.lineWidth = 2;
+      ctx.shadowBlur = 14;
+      ctx.shadowColor = '#ff6b81';
+      ctx.beginPath();
+      ctx.moveTo(b.x1, b.y1);
+      ctx.lineTo(b.x2, b.y2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    for (const p of particles) {
+      ctx.globalAlpha = p.life / p.max;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
 
   function draw() {
     const g = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-    g.addColorStop(0, '#13243a');
-    g.addColorStop(1, '#0d1530');
+    g.addColorStop(0, '#0a1524');
+    g.addColorStop(1, '#060e1a');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     drawGrid();
     drawPaths();
-    drawSpawn();
-    drawBase();
+    drawSpawnAndBase();
     drawHover();
     for (const t of towers) drawTower(t);
     for (const e of enemies) drawEnemy(e);
     for (const b of bullets) drawBullet(b);
+    drawEffects();
   }
 
   /* ============================================================
-   * 七、HUD 与交互
+   * 十、UI
    * ============================================================ */
+  function iconSvg(name) { return ICONS[name] || ICONS.dart; }
+
+  function buildDeck() {
+    $deck.innerHTML = '';
+    const order = Object.values(TOWER_TYPES).sort((a, b) => a.slot - b.slot);
+    for (const ty of order) {
+      const btn = document.createElement('button');
+      btn.className = 'tower';
+      btn.type = 'button';
+      btn.dataset.type = ty.id;
+      btn.innerHTML = `
+        <span class="tower-slot">${ty.slot}</span>
+        <span class="tower-ico" style="color:${ty.color}">${iconSvg(ty.icon)}</span>
+        <span class="tower-copy">
+          <span class="tower-name">${ty.name}</span>
+          <span class="tower-tag">${ty.slot}·${ty.tag}</span>
+        </span>
+        <span class="tower-cost">${ty.cost}</span>`;
+      btn.addEventListener('click', () => selectTower(ty.id));
+      $deck.appendChild(btn);
+    }
+    refreshDeck();
+  }
+
+  function selectTower(id) {
+    if (selectedType === id) { selectedType = null; } else { selectedType = id; }
+    refreshDeck();
+    refreshBrief();
+    updateTip();
+  }
+
+  function refreshDeck() {
+    let deployed = 0;
+    for (const t of towers) if (!t.dead) deployed++;
+    $deployed.textContent = `已部署 ${deployed} 座`;
+
+    for (const btn of $deck.querySelectorAll('.tower')) {
+      const ty = TOWER_TYPES[btn.dataset.type];
+      btn.classList.toggle('is-active', btn.dataset.type === selectedType);
+      btn.classList.toggle('is-broke', money < ty.cost);
+    }
+  }
+
+  function refreshBrief() {
+    if (!selectedType) {
+      $briefName.textContent = '选择炮塔';
+      $briefIcon.innerHTML = '';
+      $briefTag.textContent = '—';
+      $briefDesc.textContent = '点击任意炮塔，查看它的定位与参数。';
+      $briefCost.textContent = '—';
+      $briefRange.textContent = '—';
+      $briefAir.textContent = '—';
+      return;
+    }
+    const ty = TOWER_TYPES[selectedType];
+    $briefName.textContent = ty.name;
+    $briefIcon.style.color = ty.color;
+    $briefIcon.innerHTML = iconSvg(ty.icon);
+    $briefTag.textContent = ty.tag;
+    $briefDesc.textContent = ty.brief;
+    $briefCost.textContent = String(ty.cost);
+    $briefRange.textContent = `${ty.range.toFixed(1)} 格`;
+    $briefAir.textContent = ty.air ? UI_TEXT.airYes : UI_TEXT.airNo;
+  }
+
+  function updateTip() {
+    if (over) { $tip.textContent = '游戏结束，点「重开」再来一局'; return; }
+    if (paused) { $tip.textContent = '已暂停 — 按 P 继续'; return; }
+    if (!selectedType) { $tip.textContent = '先在右侧选择一种炮塔'; return; }
+    const ty = TOWER_TYPES[selectedType];
+    $tip.textContent = `点击空地部署「${ty.name}」· 造价 ${ty.cost}`;
+  }
+
+  let radarSig = null;
+
+  function refreshWavePanel() {
+    const list = new Map();
+    // 场上
+    for (const e of enemies) {
+      if (e.dead) continue;
+      list.set(e.type.id, (list.get(e.type.id) || 0) + 1);
+    }
+    // 待出场
+    for (const id of spawnQueue) {
+      list.set(id, (list.get(id) || 0) + 1);
+    }
+
+    // 仅在敌情构成变化时重建列表，否则每帧重建会让 CSS 动画反复归零
+    const sig = [...list].map(([id, n]) => id + ':' + n).join('|');
+    if (sig !== radarSig) {
+      radarSig = sig;
+      $radar.innerHTML = '';
+      if (!list.size) {
+        $radar.innerHTML = '<div class="radar-row"><span class="radar-ico" style="color:#69829d">' + ICONS.skull + '</span><span class="radar-name">暂无敌人</span></div>';
+      }
+      for (const [id, n] of list) {
+        const ty = ENEMY_TYPES[id];
+        const row = document.createElement('div');
+        row.className = 'radar-row';
+        row.innerHTML = `
+        <span class="radar-ico" style="color:${ty.color}">${iconSvg(ty.icon)}</span>
+        <span class="radar-name">${ty.name}</span>
+        <span class="radar-count">×${n}</span>`;
+        $radar.appendChild(row);
+      }
+    }
+
+    const onField = enemies.filter(e => !e.dead).length;
+    $onField.textContent = `场上 ${onField} · 待出场 ${spawnQueue.length}`;
+    $spawned.textContent = `${Math.min(appeared, totalThisWave)}/${totalThisWave} 已出现`;
+    const pct = totalThisWave ? Math.min(100, (appeared / totalThisWave) * 100) : 0;
+    $spawnBar.style.width = pct + '%';
+    $waveTitle.textContent = wave === 0 ? '待命' : (running ? UI_TEXT.running : UI_TEXT.standby);
+    $waveTip.textContent = waveCfg ? `第 ${wave} 波 · ${waveCfg.title}：${waveCfg.tip}` : '点击「开始波次」，让敌人进来。';
+  }
 
   let hudMoney = -1;
   let hudLives = -1;
   let hudWave = -1;
-  let hudAi = '';
+  let hudDeployed = -1;
 
   function updateHud() {
-    if (money !== hudMoney) { hudMoney = money; $money.textContent = String(Math.floor(money)); }
+    const moneyChanged = money !== hudMoney;
+    if (moneyChanged) { hudMoney = money; $money.textContent = String(Math.floor(money)); }
     if (lives !== hudLives) { hudLives = lives; $lives.textContent = String(lives); }
     if (wave !== hudWave) { hudWave = wave; $wave.textContent = String(wave); }
-
-    let ai;
-    if (over) {
-      ai = '基地陷落';
-    } else if (!running) {
-      ai = '待命';
-    } else {
-      let attacking = 0;
-      let marching = 0;
-      for (const e of enemies) {
-        if (e.dead) continue;
-        if (e.state === 'attack') attacking++;
-        else marching++;
-      }
-      if (attacking > 0) ai = `⛏ ${attacking} 个拆塔中`;
-      else if (marching > 0) ai = `➡ ${marching} 个行进中`;
-      else ai = '生成中…';
-    }
-
-    if (ai !== hudAi) { hudAi = ai; $ai.textContent = ai; }
+    updateTip();
+    refreshWavePanel();
+    if (moneyChanged) refreshDeck();
   }
 
+  /* ============================================================
+   * 十一、交互
+   * ============================================================ */
   function cellFromEvent(evt) {
     const rect = canvas.getBoundingClientRect();
-    const c = Math.floor(((evt.clientX - rect.left) / rect.width) * N);
-    const r = Math.floor(((evt.clientY - rect.top) / rect.height) * N);
+    const c = Math.floor(((evt.clientX - rect.left) / rect.width) * COLS);
+    const r = Math.floor(((evt.clientY - rect.top) / rect.height) * ROWS);
     return { c, r };
   }
 
@@ -709,69 +1166,91 @@
     const { c, r } = cellFromEvent(evt);
     hoverCell = inBounds(c, r) ? { c, r } : null;
   });
-
   canvas.addEventListener('mouseleave', () => { hoverCell = null; });
-
   canvas.addEventListener('click', evt => {
-    if (over) return;
+    if (over || paused) return;
     const { c, r } = cellFromEvent(evt);
     if (inBounds(c, r)) buildTower(c, r);
   });
-
-  $towerBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      selectedType = btn.dataset.tower;
-      $towerBtns.forEach(b => b.classList.toggle('is-active', b === btn));
-    });
+  canvas.addEventListener('contextmenu', evt => {
+    evt.preventDefault();
+    selectedType = null;
+    refreshDeck();
+    refreshBrief();
+    updateTip();
   });
 
+  document.addEventListener('keydown', evt => {
+    if (evt.key === 'p' || evt.key === 'P') { togglePause(); return; }
+    if (evt.key === 'Escape') { selectedType = null; refreshDeck(); refreshBrief(); updateTip(); return; }
+    const n = Number(evt.key);
+    if (n >= 1 && n <= 6) {
+      const ty = Object.values(TOWER_TYPES).find(t => t.slot === n);
+      if (ty) selectTower(ty.id);
+    }
+  });
+
+  function togglePause() {
+    if (over) return;
+    paused = !paused;
+    $pause.classList.toggle('is-on', paused);
+    $pause.textContent = paused ? '继续' : '暂停';
+    updateTip();
+  }
+
+  $pause.addEventListener('click', togglePause);
   $start.addEventListener('click', startWave);
   $restart.addEventListener('click', newGame);
 
+  /* ============================================================
+   * 十二、启动
+   * ============================================================ */
   function newGame() {
-    grid = Array.from({ length: N }, () => new Array(N).fill(0));
+    grid = Array.from({ length: ROWS }, () => new Array(COLS).fill(0));
     towers = [];
     enemies = [];
     bullets = [];
+    zaps = [];
+    beams = [];
+    particles = [];
     money = START_MONEY;
     lives = START_LIVES;
     wave = 0;
     running = false;
     over = false;
-    selectedType = 'gun';
+    paused = false;
+    selectedType = 'dart';
     hoverCell = null;
-    gridVersion = 0;
     pathDirty = false;
-    spawnQueue = 0;
+    spawnQueue = [];
     spawnTimer = 0;
     waveCfg = null;
+    appeared = 0;
+    totalThisWave = 0;
 
-    $towerBtns.forEach(b => b.classList.toggle('is-active', b.dataset.tower === 'gun'));
+    $pause.classList.remove('is-on');
+    $pause.textContent = '暂停';
     $start.disabled = false;
-    msg('选一座塔，点空地建造。把路封死，敌人就会改拆塔。');
+    msg('选一座塔，点空地建造。把路封死，它们会开始拆塔。');
 
-    hudMoney = -1;
-    hudLives = -1;
-    hudWave = -1;
-    hudAi = '';
+    hudMoney = -1; hudLives = -1; hudWave = -1; hudDeployed = -1;
+    refreshDeck();
+    refreshBrief();
+    refreshWavePanel();
+    updateTip();
     updateHud();
   }
 
-  /* ============================================================
-   * 八、启动
-   * ============================================================ */
+  // 先初始化状态，再构建炮塔面板：refreshDeck() 需要 towers 已是数组
+  newGame();
+  buildDeck();
 
-  // 固定步长：逻辑恒定 60 次/秒，和屏幕刷新率（60Hz / 144Hz / 240Hz）无关
-  const STEP = 1000 / 60;
-  const MAX_STEPS = 6;      // 单帧最多补算 6 步，防止切回标签页后一次性雪崩
-
-  let frame = 0;
   let lastTime = 0;
   let acc = 0;
+  let frame = 0;
 
   function loop(now) {
     if (!lastTime) lastTime = now;
-    // 单帧最多认 250ms，长时间挂起（切标签页）不会瞬间吞掉几十秒
     const delta = Math.min(now - lastTime, 250);
     lastTime = now;
     acc += delta;
@@ -779,18 +1258,15 @@
     let steps = 0;
     while (acc >= STEP && steps < MAX_STEPS) {
       frame++;
-      if (running && !over) update();
+      if (running && !over && !paused) update();
       acc -= STEP;
       steps++;
     }
-    // 追不上就丢弃积压，宁可慢一点也不要卡死
     if (steps >= MAX_STEPS) acc = Math.min(acc, STEP);
 
     draw();
     if (frame % 5 === 0) updateHud();
     requestAnimationFrame(loop);
   }
-
-  newGame();
   requestAnimationFrame(loop);
 })();
