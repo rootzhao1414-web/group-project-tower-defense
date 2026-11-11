@@ -1,0 +1,64 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+# 最小权限：读代码、写 Pages、申请短期身份令牌（不用长期密钥）
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个部署；但不打断正在进行的，避免线上出现半成品
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    env:
+      # 临时兼容开关：configure-pages@v5 / deploy-pages@v5 仍基于 Node 20，
+      # 而 runner 已默认 Node 24。等这些 action 发布 node24 版本后即可删掉。
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 确保 Pages 已开启
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 幂等：已开启就跳过，避免重复创建报错
+          if gh api "/repos/${{ github.repository }}/pages" >/dev/null 2>&1; then
+            echo "Pages 已启用，跳过"
+          else
+            echo "首次运行，开启 Pages（构建方式：GitHub Actions）"
+            gh api -X POST "/repos/${{ github.repository }}/pages" \
+              -f "build_type=workflow"
+          fi
+
+      - name: 收集要发布的作品文件
+        run: |
+          # 只发布游戏本体，不把 README / .gitignore / .github 一起公开
+          mkdir -p _site
+          cp index.html style.css game.js _site/
+          echo "将发布的文件："
+          ls -lh _site/
+
+      - name: 准备 Pages 环境
+        uses: actions/configure-pages@v5
+
+      - name: 打包上传
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '_site'
+
+      - name: 部署上线
+        id: deployment
+        uses: actions/deploy-pages@v5
