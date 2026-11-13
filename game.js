@@ -13,7 +13,7 @@
   const {
     PALETTE, ATTACK_STYLES, BOSS_BASE,
     ENEMY_TYPES, ENEMY_TRAITS, ENEMY_WEIGHT,
-    TOWER_TYPES, COUNTER, SLOW_MUL,
+    TOWER_TYPES, COUNTER, SLOW_MUL, ECON,
     WAVE_THEMES, UI_TEXT, ICONS,
   } = window.TD;
 
@@ -79,6 +79,7 @@
   let over;
   let paused;
   let selectedType;
+  let selectedTower;     // 画布上选中的已放置塔（用于出售）
   let hoverCell;
   let pathDirty;
   let spawnQueue;        // 待出场的敌人 id 列表
@@ -441,6 +442,61 @@
     }
   }
 
+  /* ============================================================
+   * 三·五、经济：出售回收 + 金币利息
+   * ============================================================ */
+
+  /* 回收比例：基础 + 波次增长 + 强度加成，封顶 sellMax（永远小于 1） */
+  function sellRate(w, pressure) {
+    return Math.min(
+      ECON.sellMax,
+      ECON.sellBase + w * ECON.sellPerWave + (pressure || 0) * ECON.sellPressure,
+    );
+  }
+
+  /* 一座塔现在能卖多少（残血折价） */
+  function sellValue(t) {
+    const rate = sellRate(wave, waveCfg ? waveCfg.pressure : 0);
+    const wear = 1 - ECON.sellWear * (1 - clamp(t.hp / t.maxHp, 0, 1));
+    return Math.max(1, Math.round(t.type.cost * rate * wear));
+  }
+
+  function sellTower(t) {
+    if (!t || t.dead) return;
+    if (running) { msg(UI_TEXT.sellLocked); return; }
+    const value = sellValue(t);
+    money += value;
+    t.dead = true;
+    grid[t.r][t.c] = 0;
+    pathDirty = true;
+    addParticles(t.x, t.y, PALETTE.heal, 10);
+    msg(UI_TEXT.sellDone.replace('{name}', t.type.name).replace('{v}', value));
+    selectedTower = null;
+    refreshDeck();
+    refreshBrief();
+    updateTip();
+    updateHud();
+  }
+
+  /* 利息：金币越多、波次越高、强度越大拿得越多，但有封顶，避免滚雪球 */
+  function interestFor(w, pressure) {
+    const rate = Math.min(
+      ECON.interestRateMax,
+      ECON.interestBase + w * ECON.interestPerWave + (pressure || 0) * ECON.interestPressure,
+    );
+    const cap = ECON.interestCapBase + w * ECON.interestCapPerWave;
+    return Math.min(Math.floor(money * rate), cap);
+  }
+
+  /* 点画布命中已放置的塔时，选中它（再点一次取消），而不是继续建塔 */
+  function selectPlacedTower(t) {
+    selectedType = null;
+    selectedTower = selectedTower === t ? null : t;
+    refreshDeck();
+    refreshBrief();
+    updateTip();
+  }
+
   function buildTower(c, r) {
     if (!selectedType) { msg('先在右侧选择一种炮塔'); return; }
     if (!inBounds(c, r)) return;
@@ -689,6 +745,7 @@
     enemies = enemies.filter(e => !e.dead);
     bullets = bullets.filter(b => !b.done);
     towers = towers.filter(t => !t.dead);
+    if (selectedTower && selectedTower.dead) selectedTower = null;
 
     if (lives <= 0 && !over) {
       over = true;
@@ -701,9 +758,12 @@
       running = false;
       $start.disabled = false;
       const bonus = 12 + wave * 4;
-      money += bonus;
-      msg(`✅ 第 ${wave} 波清除，奖励 +${bonus}`);
+      const interest = interestFor(wave, waveCfg ? waveCfg.pressure : 0);
+      money += bonus + interest;
+      msg(`✅ 第 ${wave} 波清除 · 奖励 +${bonus} · 利息 +${interest}`);
       refreshWavePanel();
+      refreshDeck();
+      refreshBrief();
     }
   }
 
@@ -1113,6 +1173,25 @@
     ctx.globalAlpha = 1;
   }
 
+  /* 选中已放置的塔：脚下画一圈虚线，标出卖价 */
+  function drawSelectedTower() {
+    const t = selectedTower;
+    if (!t || t.dead) return;
+    ctx.save();
+    ctx.strokeStyle = PALETTE.warn;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, T * 0.46, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = PALETTE.warn;
+    ctx.font = '600 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`+${sellValue(t)}`, t.x, t.y - T * 0.52);
+    ctx.restore();
+  }
+
   function draw() {
     const g = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
     g.addColorStop(0, '#0a1524');
@@ -1128,6 +1207,7 @@
     drawSpawnAndBase();
     drawHover();
     for (const t of towers) drawTower(t);
+    drawSelectedTower();
     for (const e of enemies) drawEnemy(e);
     for (const b of bullets) drawBullet(b);
     drawEffects();
@@ -1181,6 +1261,26 @@
   }
 
   function refreshBrief() {
+    /* 选中了已放置的塔 → 显示出售信息 */
+    if (selectedTower && !selectedTower.dead) {
+      const t = selectedTower;
+      const ty = t.type;
+      $briefName.textContent = ty.name;
+      $briefIcon.style.color = ty.color;
+      $briefIcon.innerHTML = iconSvg(ty.icon);
+      $briefTag.textContent = UI_TEXT.sellTag;
+      $briefDesc.textContent = running
+        ? UI_TEXT.sellLocked
+        : UI_TEXT.sellBody.replace('{v}', sellValue(t));
+      $briefCost.textContent = String(ty.cost);
+      $briefRange.textContent = `${ty.range.toFixed(1)} 格`;
+      $briefAir.textContent = ty.air ? UI_TEXT.airYes : UI_TEXT.airNo;
+      const strongT = Object.entries(COUNTER[ty.id] || {})
+        .filter(([, mul]) => mul >= 1.25)
+        .map(([id]) => ENEMY_TYPES[id].name);
+      $briefCounter.textContent = strongT.length ? strongT.join(' · ') : '无特别克制';
+      return;
+    }
     if (!selectedType) {
       $briefName.textContent = '选择炮塔';
       $briefIcon.innerHTML = '';
@@ -1212,6 +1312,12 @@
   function updateTip() {
     if (over) { $tip.textContent = '游戏结束，点「重开」再来一局'; return; }
     if (paused) { $tip.textContent = '已暂停 — 按 P 继续'; return; }
+    if (selectedTower && !selectedTower.dead) {
+      $tip.textContent = running
+        ? `「${selectedTower.type.name}」战斗中不能出售，等这一波结束`
+        : `已选中「${selectedTower.type.name}」· 按 X 出售，可得 ${sellValue(selectedTower)} 金币`;
+      return;
+    }
     if (!selectedType) { $tip.textContent = '先在右侧选择一种炮塔'; return; }
     const ty = TOWER_TYPES[selectedType];
     $tip.textContent = `点击空地部署「${ty.name}」· 造价 ${ty.cost}`;
@@ -1293,11 +1399,16 @@
   canvas.addEventListener('click', evt => {
     if (over || paused) return;
     const { c, r } = cellFromEvent(evt);
-    if (inBounds(c, r)) buildTower(c, r);
+    if (!inBounds(c, r)) return;
+    /* 点在有塔的格子上 → 选中它准备出售，而不是继续建塔 */
+    const hit = towers.find(t => !t.dead && t.c === c && t.r === r);
+    if (hit) { selectPlacedTower(hit); return; }
+    buildTower(c, r);
   });
   canvas.addEventListener('contextmenu', evt => {
     evt.preventDefault();
     selectedType = null;
+    selectedTower = null;
     refreshDeck();
     refreshBrief();
     updateTip();
@@ -1305,7 +1416,8 @@
 
   document.addEventListener('keydown', evt => {
     if (evt.key === 'p' || evt.key === 'P') { togglePause(); return; }
-    if (evt.key === 'Escape') { selectedType = null; refreshDeck(); refreshBrief(); updateTip(); return; }
+    if (evt.key === 'Escape') { selectedType = null; selectedTower = null; refreshDeck(); refreshBrief(); updateTip(); return; }
+    if (evt.key === 'x' || evt.key === 'X') { if (selectedTower) sellTower(selectedTower); return; }
     const n = Number(evt.key);
     if (n >= 1 && n <= 6) {
       const ty = Object.values(TOWER_TYPES).find(t => t.slot === n);
@@ -1346,6 +1458,7 @@
     over = false;
     paused = false;
     selectedType = 'dart';
+    selectedTower = null;
     hoverCell = null;
     pathDirty = false;
     spawnQueue = [];

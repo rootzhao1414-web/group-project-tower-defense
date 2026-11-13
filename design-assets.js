@@ -271,6 +271,29 @@ window.TD = (() => {
     foot: 'P 暂停 · Esc 取消选择 · 右键取消',
     fieldNow: '场上',
     deployed: '已部署',
+    sellTag: '已部署 · 可出售',
+    sellBody: '出售可得 {v} 金币（按 X）。回收比例随波次上涨，越往后卖越划算。',
+    sellLocked: '战斗中不能出售，等这一波结束。',
+    sellDone: '出售 {name}，回收 +{v}',
+  };
+
+  /* ----------------------------------------------------------
+   * E2. 经济参数（出售回收 + 金币利息）
+   *  - sell*     回收比例 = 基础 + 波次增长 + 强度加成，封顶 0.8，永远低于原价
+   *  - interest* 利息 = 金币 × 利率（随波次/强度上升，封顶 15%），单波封顶 10 + 波次×5
+   * ---------------------------------------------------------- */
+  const ECON = {
+    sellBase: 0.42,
+    sellPerWave: 0.035,
+    sellMax: 0.8,
+    sellPressure: 0.08,
+    sellWear: 0.35,        // 残血折价：血量越低回收越少
+    interestBase: 0.05,
+    interestPerWave: 0.008,
+    interestPressure: 0.03,
+    interestRateMax: 0.15,
+    interestCapBase: 10,
+    interestCapPerWave: 5,
   };
 
   /* ----------------------------------------------------------
@@ -297,7 +320,7 @@ window.TD = (() => {
   return {
     PALETTE, ATTACK_STYLES, BOSS_BASE,
     ENEMY_TYPES, ENEMY_TRAITS, ENEMY_WEIGHT,
-    TOWER_TYPES, COUNTER, SLOW_MUL,
+    TOWER_TYPES, COUNTER, SLOW_MUL, ECON,
     WAVE_THEMES, UI_TEXT, ICONS,
   };
 })();
