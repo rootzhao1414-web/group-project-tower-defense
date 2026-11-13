@@ -2,7 +2,7 @@
  * game.js — 塔防 · 敌情雷达（v2）
  * ------------------------------------------------------------
  * 在「塔防 × AI」初版基础上扩展：
- *   1. 六种炮塔（昵称/定位/造价/对空属性来自设计稿）
+ *   1. 五种炮塔（昵称/定位/造价/对空属性来自设计稿）
  *   2. 五类敌人（护甲 / 飞行 / BOSS 机制）
  *   3. 暂停、快捷键、部署简报、敌情雷达实时列表
  *   4. 视觉与文案对齐设计稿的深蓝霓虹风格
@@ -383,32 +383,6 @@
       if (t.dead) continue;
       const ty = t.type;
 
-      // 地雷：持续光环
-      if (ty.id === 'mine') {
-        if (t.auraT > 0) {
-          t.auraT--;
-          if (t.auraT % ty.aura.tick === 0) {
-            for (const e of enemies) {
-              if (e.dead || e.flying) continue;
-              if (Math.hypot(e.x - t.x, e.y - t.y) <= ty.aura.radius * T) {
-                damageEnemy(e, ty.dmg);
-              }
-            }
-            addParticles(t.x, t.y, ty.color, 3);
-          }
-          continue;
-        }
-        if (t.cd > 0) { t.cd--; continue; }
-        const near = enemies.some(e => !e.dead && !e.flying &&
-          Math.hypot(e.x - t.x, e.y - t.y) <= ty.range * T);
-        if (near) {
-          t.auraT = ty.aura.duration;
-          t.cd = ty.rate + ty.aura.duration;
-          msg('⚡ 磁暴地雷引爆');
-        }
-        continue;
-      }
-
       if (t.cd > 0) { t.cd--; continue; }
       const target = pickTarget(t);
       if (!target) continue;
@@ -445,7 +419,6 @@
       hp: type.hp, maxHp: type.hp,
       cd: 0,
       angle: -Math.PI / 2,
-      auraT: 0,
       dead: false,
     });
 
@@ -764,16 +737,6 @@
         ctx.stroke();
         break;
       }
-      case 'mine': {
-        ctx.beginPath();
-        ctx.arc(0, 0, 6, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(0, -6); ctx.lineTo(0, -10);
-        ctx.moveTo(-4, 3); ctx.lineTo(4, 3);
-        ctx.stroke();
-        break;
-      }
       default: {
         ctx.beginPath();
         ctx.arc(0, 0, 6, 0, Math.PI * 2);
@@ -799,24 +762,6 @@
     ctx.restore();
 
     towerGlyph(ty, t.x, t.y, t.angle);
-
-    // 地雷光环
-    if (ty.id === 'mine') {
-      const active = t.auraT > 0;
-      ctx.beginPath();
-      ctx.arc(t.x, t.y, ty.range * T, 0, Math.PI * 2);
-      ctx.strokeStyle = active ? 'rgba(180,140,255,0.55)' : 'rgba(180,140,255,0.18)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 6]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      if (active) {
-        ctx.beginPath();
-        ctx.arc(t.x, t.y, ty.aura.radius * T, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(180,140,255,0.07)';
-        ctx.fill();
-      }
-    }
 
     if (t.hp < t.maxHp) {
       const w = T * 0.62;
@@ -1055,7 +1000,7 @@
   function refreshDeck() {
     let deployed = 0;
     for (const t of towers) if (!t.dead) deployed++;
-    $deployed.textContent = `已部署 ${deployed} 座`;
+    $deployed.textContent = UI_TEXT.deckMeta.replace('{n}', deployed);
 
     for (const btn of $deck.querySelectorAll('.tower')) {
       const ty = TOWER_TYPES[btn.dataset.type];

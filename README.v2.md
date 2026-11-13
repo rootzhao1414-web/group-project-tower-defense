@@ -33,9 +33,9 @@ python -m http.server 8787
 | `flyer` | 虚空蝠 | 44 | 68 | 飞行，直线扑基地，仅对空塔可命中 |
 | `colossus` | 深渊巨像 | 820 | 24 | BOSS，护甲 8，赏金 80 |
 
-> 设计稿只出现「深渊巨像 ×1 / 重甲兵 ×4」，其余三个是为六塔克制关系补的类型，`design-assets.js` 里用 `source: 'extended'` 标注，便于和设计原文区分。
+> 设计稿只出现「深渊巨像 ×1 / 重甲兵 ×4」，其余三个是为五塔克制关系补的类型，`design-assets.js` 里用 `source: 'extended'` 标注，便于和设计原文区分。
 
-### 炮塔（六格快捷键 1-6）
+### 炮塔（五格快捷键 1-5）
 
 | 槽位 | 昵称 | 定位 | 造价 | 伤害/间隔 | 射程 |
 |---|---|---|---|---|---|
@@ -44,20 +44,19 @@ python -m http.server 8787
 | 3 | 霜冻棱镜 | 减速控制 | 45 | 3 / 26 帧，减速 45% | 2.6 格，对空 |
 | 4 | 雷霆线圈 | 连锁闪电 | 70 | 14 / 40 帧，连锁 3 段 | 2.3 格，对空 |
 | 5 | 苍穹狙击塔 | 远程重击 | 65 | 46 / 76 帧，无视护甲 | 5.0 格，对空 |
-| 6 | 磁暴地雷 | 持续伤害 | 50 | 光环 1.35 格，2.5 秒 | 得有人踩上去，不对空 |
 
-设计稿给出的只有 1-6 的昵称、定位、造价与「震荡炮塔 55 / 2.6 格 / 无法攻击飞行单位」这组样例；其余数值是按克制关系补的平衡值。
+设计稿给出的只有 1-6 的昵称、定位、造价与「震荡炮塔 55 / 2.6 格 / 无法攻击飞行单位」这组样例；其余数值是按克制关系补的平衡值。原设计稿的 6 号「磁暴地雷」已按需求移除，保留 5 塔。
 
 ### 美术资产
 
 - `PALETTE`：`#050b16` 底、`#0c1728` 面板、`#3fe0ff` 主色、`#ff9f43` 选中橙、`#ff4d5e` 敌方红、`#3ddc97` 基地绿。
-- `ICONS`：11 个 24×24 线性 SVG（`dart / cannon / frost / tesla / sniper / mine / skull / shield / bolt / wing / ghost`），全部 `stroke="currentColor"`，换色只改外层 `color`。
+- `ICONS`：10 个 24×24 线性 SVG（`dart / cannon / frost / tesla / sniper / skull / shield / bolt / wing / ghost`），全部 `stroke="currentColor"`，换色只改外层 `color`。
 
 ## 相比旧版（`group-project-tower-defense`）的改动
 
 | 项 | 旧版 | v2 |
 |---|---|---|
-| 炮塔 | 3 种（机枪塔 / 炮台 / 冰塔） | 6 种，各自有独立机制 |
+| 炮塔 | 3 种（机枪塔 / 炮台 / 冰塔） | 5 种，各自有独立机制 |
 | 敌人 | 单一小怪 | 5 种，带护甲 / 飞行 / BOSS |
 | 地图 | 13×13，40px 格 | 16×9，60px 格，屏幕比例更贴设计稿 |
 | 伤害模型 | 固定扣血 | `max(1, dmg - armor)`，狙击塔穿甲 |
@@ -72,7 +71,7 @@ python -m http.server 8787
 cd D:\group-project-tower-defense
 git checkout -b feat/radar-ui
 # 拷贝本目录 4 个文件覆盖（design-assets.js 一并带上）
-git add -A && git commit -m "feat: 六塔体系与敌情雷达 UI"
+git add -A && git commit -m "feat: 五塔体系与敌情雷达 UI"
 git push -u origin feat/radar-ui
 ```
 

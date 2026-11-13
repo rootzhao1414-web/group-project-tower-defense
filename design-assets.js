@@ -131,16 +131,6 @@ window.TD = (() => {
       brief: '射程覆盖半个战场，单发重击并且无视护甲，专治重甲兵与巨像。',
       source: 'design',
     },
-    mine: {
-      id: 'mine', slot: 6, name: '磁暴地雷', tag: '持续伤害',
-      icon: 'mine', color: '#b48cff',
-      cost: 50, dmg: 8, rate: 180, range: 0.9,
-      aura: { radius: 1.35, tick: 30, duration: 150 },
-      air: false, pierceArmor: false,
-      hp: 60,
-      brief: '敌人靠近时引爆，在 1.35 格内持续放电 2.5 秒，适合卡在隘口。',
-      source: 'design',
-    },
   };
 
   /* ----------------------------------------------------------
@@ -166,7 +156,7 @@ window.TD = (() => {
     radarName: '敌情雷达',
     deckTitle: 'BUILD DECK',
     deckName: '炮塔部署',
-    deckMeta: '已部署 {n} 座 · 快捷键 1-6',
+    deckMeta: '已部署 {n} 座 · 快捷键 1-5',
     briefTitle: 'DEPLOYMENT BRIEF',
     paused: '已暂停',
     running: '作战中',
@@ -195,7 +185,6 @@ window.TD = (() => {
     frost: S('<path d="M12 3v18"/><path d="M4.2 7.5l15.6 9"/><path d="M19.8 7.5l-15.6 9"/><path d="M12 7l-2-2M12 7l2-2M12 17l-2 2M12 17l2 2"/>'),
     tesla: S('<path d="M7 4h10l-2 6h4L9 20l2-7H7z"/>'),
     sniper: S('<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>'),
-    mine: S('<circle cx="12" cy="14" r="6"/><path d="M12 8V4"/><path d="M6 10l-2-2M18 10l2-2"/><path d="M9 14h6"/>'),
     // —— 敌人 ——
     skull: S('<path d="M12 3c-4.4 0-7 3-7 7 0 2.6 1.4 4.2 3 5.2V19a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-3.8c1.6-1 3-2.6 3-5.2 0-4-2.6-7-7-7z"/><circle cx="9.5" cy="11" r="1.2"/><circle cx="14.5" cy="11" r="1.2"/>'),
     shield: S('<path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M12 8v6"/>'),
