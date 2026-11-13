@@ -10,7 +10,12 @@
 (() => {
   'use strict';
 
-  const { PALETTE, ENEMY_TYPES, TOWER_TYPES, WAVE_BLUEPRINTS, WAVE_TEMPLATES, UI_TEXT, ICONS } = window.TD;
+  const {
+    PALETTE, ATTACK_STYLES, BOSS_BASE,
+    ENEMY_TYPES, ENEMY_TRAITS, ENEMY_WEIGHT,
+    TOWER_TYPES, COUNTER, SLOW_MUL,
+    WAVE_THEMES, UI_TEXT, ICONS,
+  } = window.TD;
 
   /* ============================================================
    * 零、常量与 DOM
@@ -51,6 +56,7 @@
   const $briefCost = $('brief-cost');
   const $briefRange = $('brief-range');
   const $briefAir = $('brief-air');
+  const $briefCounter = $('brief-counter');
   const $tip = $('tip');
 
   /* ============================================================
@@ -63,6 +69,9 @@
   let zaps;              // 雷霆线圈的闪电特效
   let beams;             // 狙击塔的光束特效
   let particles;         // 命中/爆炸粒子
+  let marks;             // 攻击留下的爪痕/火花/冲击环（纯表现）
+  let shake;             // 镜头震动强度
+  let seenBossAttack;    // boss 攻击方式的首次提示已播过
   let money;
   let lives;
   let wave;
@@ -152,10 +161,23 @@
   /* ============================================================
    * 四、敌人
    * ============================================================ */
+  // 普通敌人：三围写死在 ENEMY_TYPES，攻击力统一 7；
+  // Boss：三围 = BOSS_BASE × ratios，按 boss 种类给不同的速度/攻击/防御占比。
   function enemyStats(type, hpMul, speedMul) {
+    if (type.boss) {
+      const r = type.ratios || { speed: 1, attack: 1, defense: 1 };
+      return {
+        hp: Math.round(BOSS_BASE.hp * hpMul),
+        speed: BOSS_BASE.speed * r.speed * speedMul,
+        attack: Math.max(1, Math.round(BOSS_BASE.attack * r.attack)),
+        armor: Math.max(0, Math.round(BOSS_BASE.armor * r.defense)),
+      };
+    }
     return {
       hp: Math.round(type.hp * hpMul),
       speed: type.speed * speedMul,
+      attack: 7,
+      armor: type.armor,
     };
   }
 
@@ -166,7 +188,8 @@
       type, x: cx(SPAWN.c), y: cy(SPAWN.r),
       hp: st.hp, maxHp: st.hp,
       speed: st.speed,
-      armor: type.armor,
+      attack: st.attack,
+      armor: st.armor,
       flying: type.flying,
       r: type.radius,
       state: 'march',
@@ -175,6 +198,7 @@
       target: null,
       atkCd: 0,
       hitFlash: 0,
+      swing: 0,
       angle: 0,
       dead: false,
     };
@@ -214,16 +238,24 @@
 
   function damageEnemy(e, rawDmg, opts = {}) {
     if (e.dead) return;
+
+    // —— 特攻耦合：同一发攻击打不同敌人，伤害倍率不同 ——
+    const tower = opts.tower;
+    if (tower === 'cannon' && e.flying) return;        // 震荡炮塔打不到空中
+    const mul = tower && COUNTER[tower] ? (COUNTER[tower][e.id] ?? 1) : 1;
+    if (mul <= 0) return;
+
     const armor = opts.pierceArmor ? 0 : e.armor;
-    const dmg = Math.max(1, rawDmg - armor);
+    const dmg = Math.max(1, Math.round(rawDmg * mul) - armor);
     e.hp -= dmg;
     e.hitFlash = 6;
+    if (mul >= 1.3) addParticles(e.x, e.y, PALETTE.warn, 3); // 克制命中：橙色火花
     if (dmg > 0) addParticles(e.x, e.y, e.type.color, 2);
     if (e.hp <= 0) {
       e.dead = true;
       money += e.type.reward;
       addParticles(e.x, e.y, e.type.color, e.type.boss ? 26 : 8);
-      if (e.type.boss) msg(`☠ 深渊巨像倒下了！+${e.type.reward}`);
+      if (e.type.boss) msg(`☠ ${e.type.name}倒下了！+${e.type.reward}`);
     }
   }
 
@@ -246,10 +278,27 @@
       e.atkCd--;
       if (e.atkCd <= 0) {
         e.atkCd = 38;
-        t.hp -= 7;
-        addParticles(t.x, t.y, PALETTE.danger, 3);
+        t.hp -= e.attack;
+        playAttack(e, t);
         if (t.hp <= 0) destroyTower(t);
       }
+    }
+  }
+
+  /* ---- 攻击表现：只改观感，不改伤害与间隔 ---- */
+  function playAttack(e, t) {
+    const st = ATTACK_STYLES[e.type.attack] || ATTACK_STYLES.claw;
+    e.swing = 1;
+    addParticles(t.x, t.y, st.color, st.puffs);
+    if (st.shake > 0) shake = Math.max(shake, st.shake);
+    marks.push({
+      x: t.x, y: t.y, life: 18, max: 18,
+      style: st.mark, color: st.color, r: T * 0.55,
+    });
+    // 首次见到某种 boss 的攻击方式时，报一次文案
+    if (e.type.boss && !seenBossAttack[e.type.id]) {
+      seenBossAttack[e.type.id] = true;
+      msg(`${e.type.name} · ${st.label}：${st.desc}`);
     }
   }
 
@@ -257,6 +306,7 @@
     for (const e of enemies) {
       if (e.dead) continue;
       if (e.hitFlash > 0) e.hitFlash--;
+      if (e.swing > 0) e.swing = Math.max(0, e.swing - 0.1);
       if (e.slowT > 0) e.slowT--;
 
       if (e.state === 'attack') { updateEnemyAttack(e); continue; }
@@ -453,13 +503,17 @@
       b.angle = Math.atan2(dy, dx);
 
       if (d < 9) {
-        damageEnemy(b.target, b.dmg, { pierceArmor: b.pierceArmor });
-        if (b.slow) b.target.slowT = b.slowDur;
+        damageEnemy(b.target, b.dmg, { pierceArmor: b.pierceArmor, tower: b.kind });
+        // 减速时长也吃特攻：对高速单位效果更久
+        if (b.slow) {
+          const slowMul = SLOW_MUL[b.target.id] || 1;
+          b.target.slowT = Math.round(b.slowDur * slowMul);
+        }
         if (b.splash > 0) {
           for (const o of enemies) {
             if (o === b.target || o.dead || o.flying) continue;
             if (Math.hypot(o.x - b.target.x, o.y - b.target.y) <= b.splash) {
-              damageEnemy(o, b.dmg * 0.5);
+              damageEnemy(o, b.dmg * 0.5, { tower: b.kind });
             }
           }
           addParticles(b.x, b.y, b.color, 6);
@@ -494,6 +548,10 @@
     zaps = zaps.filter(z => z.life > 0);
     for (const b of beams) b.life--;
     beams = beams.filter(b => b.life > 0);
+    for (const m of marks) m.life--;
+    marks = marks.filter(m => m.life > 0);
+    shake *= 0.86;
+    if (shake < 0.06) shake = 0;
   }
 
   /* ============================================================
@@ -508,28 +566,85 @@
     return towers.length * 6 + dps * 60 * 1.1 + money * 0.06 + lives * 0.35;
   }
 
+  /* 玩家当前的塔配置：{ dart: 2, sniper: 1 } */
+  function towerProfile() {
+    const p = {};
+    for (const t of towers) {
+      if (t.dead) continue;
+      p[t.type.id] = (p[t.type.id] || 0) + 1;
+    }
+    return p;
+  }
+
+  /* 玩家对某种敌人的反制力（越大越不怕它） */
+  function counterAgainst(profile, enemyId) {
+    let s = 0;
+    for (const id in profile) {
+      const ty = TOWER_TYPES[id];
+      if (!ty) continue;
+      const dps = ty.dmg / ty.rate;
+      s += profile[id] * dps * (COUNTER[id]?.[enemyId] ?? 1);
+    }
+    return s;
+  }
+
   function buildWave(w) {
-    const bp = w <= WAVE_BLUEPRINTS.length
-      ? WAVE_BLUEPRINTS[w - 1]
-      : { title: `${WAVE_BLUEPRINTS[(w - 1) % 6].title} · 强化`, tip: '强度提升，注意补防空。', units: WAVE_TEMPLATES[(w - 1) % 6] };
+    const theme = w <= WAVE_THEMES.length
+      ? WAVE_THEMES[w - 1]
+      : {
+          ...WAVE_THEMES[(w - 1) % WAVE_THEMES.length],
+          title: `${WAVE_THEMES[(w - 1) % WAVE_THEMES.length].title} · 强化`,
+          tip: '强度提升，注意补防空。',
+        };
 
     const power = currentPower();
     const pressure = clamp((power - 40) / 220, 0, 1);
     const hpMul = (1 + (w - 1) * 0.1) * (1 + pressure * 0.5);
     const speedMul = 1 + (w - 1) * 0.012 + pressure * 0.1;
 
+    /* —— 智能配比 ——
+     * 1) 算玩家对池内每种敌人的反制力，取均值做基准
+     * 2) 反制力低于均值的敌人 = 玩家软肋 → 提高它的权重
+     * 3) 用「威胁预算」而不是固定只数，钱多则预算高
+     */
+    const profile = towerProfile();
+    const pool = theme.pool;
+    const raw = pool.map(id => counterAgainst(profile, id));
+    const avg = raw.reduce((a, b) => a + b, 0) / (raw.length || 1);
+    const weights = pool.map((id, i) => {
+      const ratio = avg > 0 ? raw[i] / avg : 1;
+      const softness = clamp(1.55 - ratio * 0.42, 0.45, 1.7);
+      return ENEMY_WEIGHT[id] * softness;
+    });
+
+    const budget = Math.round((7 + w * 1.5) * (1 + pressure * 0.25) + money * 0.015);
+    const wsum = weights.reduce((a, b) => a + b, 0) || 1;
+
     const units = [];
-    for (const [id, n] of bp.units) {
-      const count = Math.max(1, Math.round(n * (1 + (w - 1) * 0.04) * (1 + pressure * 0.35)));
-      for (let i = 0; i < count; i++) units.push(id);
+    for (let i = 0; i < pool.length; i++) {
+      const share = weights[i] / wsum;
+      const n = Math.max(1, Math.round((budget * share) / ENEMY_WEIGHT[pool[i]]));
+      for (let k = 0; k < n; k++) units.push(pool[i]);
     }
+
+    // Boss 固定 1 只，不参与预算分配，避免被压力系数放大成两三只
+    if (theme.boss) units.push(theme.boss);
+
     // 洗牌，让出怪顺序有变化
     for (let i = units.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [units[i], units[j]] = [units[j], units[i]];
     }
 
-    return { title: bp.title, tip: bp.tip, units, hpMul, speedMul, pressure };
+    // 给玩家看这一波到底派了什么
+    const tally = {};
+    for (const id of units) tally[id] = (tally[id] || 0) + 1;
+    const summary = Object.entries(tally)
+      .sort((a, b) => b[1] - a[1])
+      .map(([id, n]) => `${ENEMY_TYPES[id].name}×${n}`)
+      .join(' ');
+
+    return { title: theme.title, tip: theme.tip, units, hpMul, speedMul, pressure, summary };
   }
 
   function startWave() {
@@ -545,7 +660,7 @@
     $pause.classList.remove('is-on');
     $pause.textContent = '暂停';
     $start.disabled = true;
-    msg(`第 ${wave} 波 · ${waveCfg.title} 来袭（强度 ${Math.round(waveCfg.pressure * 100)}%）`);
+    msg(`第 ${wave} 波 · ${waveCfg.title}：${waveCfg.summary}（强度 ${Math.round(waveCfg.pressure * 100)}%）`);
     refreshWavePanel();
   }
 
@@ -860,6 +975,12 @@
     ctx.restore();
 
     ctx.save();
+    if (e.swing > 0) {
+      const sc = 1 + e.swing * 0.18;
+      ctx.translate(e.x, e.y);
+      ctx.scale(sc, sc);
+      ctx.translate(-e.x, -e.y);
+    }
     ctx.shadowBlur = e.type.boss ? 24 : 10;
     ctx.shadowColor = e.type.color;
     enemyShape(e);
@@ -936,6 +1057,52 @@
       ctx.restore();
     }
 
+    for (const m of marks) {
+      const k = m.life / m.max;
+      ctx.save();
+      ctx.globalAlpha = k * k;
+      ctx.strokeStyle = m.color;
+      ctx.lineWidth = 2;
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = m.color;
+      const r = m.r * (1 + (1 - k) * 0.5);
+      if (m.style === 'ring') {
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, r * (2 - k), 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (m.style === 'spark') {
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2 + 0.4;
+          ctx.beginPath();
+          ctx.moveTo(m.x + Math.cos(a) * r * 0.3, m.y + Math.sin(a) * r * 0.3);
+          ctx.lineTo(m.x + Math.cos(a) * r * 0.9, m.y + Math.sin(a) * r * 0.9);
+          ctx.stroke();
+        }
+      } else if (m.style === 'dash') {
+        for (let i = -1; i <= 1; i++) {
+          ctx.beginPath();
+          ctx.moveTo(m.x - r, m.y + i * r * 0.28);
+          ctx.lineTo(m.x + r, m.y + i * r * 0.28);
+          ctx.stroke();
+        }
+      } else if (m.style === 'feather') {
+        for (let i = 0; i < 3; i++) {
+          ctx.beginPath();
+          ctx.arc(m.x, m.y + i * 6, r * 0.55, Math.PI * 1.15, Math.PI * 1.85);
+          ctx.stroke();
+        }
+      } else {
+        for (let i = 0; i < 3; i++) {
+          const a = -0.7 + i * 0.32;
+          ctx.beginPath();
+          ctx.moveTo(m.x - Math.cos(a) * r, m.y - Math.sin(a) * r);
+          ctx.lineTo(m.x + Math.cos(a) * r, m.y + Math.sin(a) * r);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
     for (const p of particles) {
       ctx.globalAlpha = p.life / p.max;
       ctx.fillStyle = p.color;
@@ -953,6 +1120,9 @@
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    ctx.save();
+    if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+
     drawGrid();
     drawPaths();
     drawSpawnAndBase();
@@ -961,6 +1131,7 @@
     for (const e of enemies) drawEnemy(e);
     for (const b of bullets) drawBullet(b);
     drawEffects();
+    ctx.restore();
   }
 
   /* ============================================================
@@ -1018,6 +1189,7 @@
       $briefCost.textContent = '—';
       $briefRange.textContent = '—';
       $briefAir.textContent = '—';
+      $briefCounter.textContent = '—';
       return;
     }
     const ty = TOWER_TYPES[selectedType];
@@ -1029,6 +1201,12 @@
     $briefCost.textContent = String(ty.cost);
     $briefRange.textContent = `${ty.range.toFixed(1)} 格`;
     $briefAir.textContent = ty.air ? UI_TEXT.airYes : UI_TEXT.airNo;
+
+    // 特攻：这条塔把哪些敌人打得更疼
+    const strong = Object.entries(COUNTER[ty.id] || {})
+      .filter(([, mul]) => mul >= 1.25)
+      .map(([id]) => ENEMY_TYPES[id].name);
+    $briefCounter.textContent = strong.length ? strong.join(' · ') : '无特别克制';
   }
 
   function updateTip() {
@@ -1158,6 +1336,9 @@
     zaps = [];
     beams = [];
     particles = [];
+    marks = [];
+    shake = 0;
+    seenBossAttack = {};
     money = START_MONEY;
     lives = START_LIVES;
     wave = 0;
@@ -1214,4 +1395,26 @@
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
+
+  // 调试钩子：?debug=1 时暴露内部状态，便于逐个验证 boss 表现
+  if (location.search.indexOf('debug=1') >= 0) {
+    window.__td = {
+      spawnEnemy,
+      stats: id => enemyStats(ENEMY_TYPES[id] || {}, 1, 1),
+      state: () => ({ wave, money, lives, towers: towers.length, enemies: enemies.length, marks, shake }),
+      setWave: w => { wave = w; },
+      // 把刚生成的敌人瞬移到第一座塔旁边并强制进入拆塔状态，用来快速验证攻击表现
+      poke: id => {
+        spawnEnemy(id);
+        const e = enemies[enemies.length - 1];
+        const t = towers[0];
+        if (!t) return 'no tower';
+        e.x = t.x + T * 0.9;
+        e.y = t.y;
+        e.state = 'attack';
+        e.target = t;
+        return { id, attack: e.attack, towerHp: t.hp, marks: marks.length, shake };
+      },
+    };
+  }
 })();
