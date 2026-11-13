@@ -30,10 +30,11 @@
   const STEP = 1000 / 60;
   const MAX_STEPS = 6;
 
-  const canvas = document.getElementById('game');
-  const ctx = canvas.getContext('2d');
-
-  const $ = id => document.getElementById(id);
+  const headless = typeof document === 'undefined';
+  const $ = id => headless ? null : document.getElementById(id);
+  const canvas = $('game');
+  const ctx = canvas?.getContext('2d');
+  const adviceModel = window.TDDeployment;
   const $money = $('hud-money');
   const $lives = $('hud-lives');
   const $wave = $('hud-wave');
@@ -58,6 +59,9 @@
   const $briefAir = $('brief-air');
   const $briefCounter = $('brief-counter');
   const $tip = $('tip');
+  const $forecast = $('btn-forecast');
+  const $advise = $('btn-advise');
+  const $advice = $('deployment-result');
 
   /* ============================================================
    * 一、状态
@@ -87,6 +91,10 @@
   let waveCfg;
   let appeared;          // 本波已出现数量
   let totalThisWave;     // 本波总数
+  let leaked;
+  let nextWaveSeed;
+  let forecastForWave;
+  let recommended;
 
   /* ============================================================
    * 二、小工具
@@ -95,7 +103,7 @@
   const cy = r => r * T + T / 2;
   const inBounds = (c, r) => c >= 0 && c < COLS && r >= 0 && r < ROWS;
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
-  const msg = t => { $msg.textContent = t; };
+  const msg = t => { if ($msg) $msg.textContent = t; };
   const rand = (a, b) => a + Math.random() * (b - a);
 
   const DIRS8 = [
@@ -113,7 +121,7 @@
     return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
   }
 
-  function findPath(sc, sr) {
+  function findPath(sc, sr, board = grid) {
     if (!inBounds(sc, sr)) return null;
     if (sc === BASE.c && sr === BASE.r) return [{ c: sc, r: sr }];
 
@@ -145,8 +153,8 @@
         const nc = cur.c + dc;
         const nr = cur.r + dr;
         if (!inBounds(nc, nr)) continue;
-        if (grid[nr][nc] === 1) continue;
-        if (dc !== 0 && dr !== 0 && (grid[cur.r][nc] === 1 || grid[nr][cur.c] === 1)) continue;
+        if (board[nr][nc] === 1) continue;
+        if (dc !== 0 && dr !== 0 && (board[cur.r][nc] === 1 || board[nr][cur.c] === 1)) continue;
         const nKey = nc + ',' + nr;
         if (closed.has(nKey)) continue;
         const ng = cur.g + cost;
@@ -288,6 +296,7 @@
 
   /* ---- 攻击表现：只改观感，不改伤害与间隔 ---- */
   function playAttack(e, t) {
+    if (headless) return;
     const st = ATTACK_STYLES[e.type.attack] || ATTACK_STYLES.claw;
     e.swing = 1;
     addParticles(t.x, t.y, st.color, st.puffs);
@@ -352,6 +361,7 @@
   function arriveBase(e) {
     if (e.dead) return;
     e.dead = true;
+    leaked++;
     lives -= e.type.boss ? 3 : 1;
     addParticles(cx(BASE.c), cy(BASE.r), PALETTE.danger, 10);
     msg(e.type.boss ? '💥 巨像撞穿基地！生命 -3' : '⚠ 敌人突破防线！');
@@ -472,6 +482,7 @@
     addParticles(t.x, t.y, PALETTE.heal, 10);
     msg(UI_TEXT.sellDone.replace('{name}', t.type.name).replace('{v}', value));
     selectedTower = null;
+    clearDeployment();
     refreshDeck();
     refreshBrief();
     updateTip();
@@ -490,6 +501,7 @@
 
   /* 点画布命中已放置的塔时，选中它（再点一次取消），而不是继续建塔 */
   function selectPlacedTower(t) {
+    if (recommended) clearRecommendation();
     selectedType = null;
     selectedTower = selectedTower === t ? null : t;
     refreshDeck();
@@ -528,10 +540,18 @@
       dead: false,
     });
 
-    if (!findPath(SPAWN.c, SPAWN.r)) {
-      msg('🚫 所有通路被封死 —— 敌人开始拆塔');
-    } else {
+    if (headless) return;
+    if (findPath(SPAWN.c, SPAWN.r)) {
       msg(`部署完成：${type.name}（${type.tag}）`);
+    } else {
+      msg('🚫 所有通路被封死 —— 敌人开始拆塔');
+    }
+    const accepted = recommended?.c === c && recommended?.r === r && recommended?.type === type
+      ? recommended : null;
+    clearDeployment();
+    if (accepted) {
+      forecastForWave = accepted.prediction;
+      syncDeploymentControls(`已部署${type.name} · ${accepted.config.summary} · 预计漏怪 ${accepted.prediction.toFixed(1)} 只`);
     }
     refreshDeck();
   }
@@ -583,6 +603,7 @@
   }
 
   function addParticles(x, y, color, n) {
+    if (headless) return;
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = rand(0.6, 3.4);
@@ -613,20 +634,18 @@
   /* ============================================================
    * 七、波次
    * ============================================================ */
-  function currentPower() {
+  function currentPower(activeTowers, cash, health) {
     let dps = 0;
-    for (const t of towers) {
-      if (t.dead) continue;
+    for (const t of activeTowers) {
       dps += t.type.dmg / t.type.rate;
     }
-    return towers.length * 6 + dps * 60 * 1.1 + money * 0.06 + lives * 0.35;
+    return activeTowers.length * 6 + dps * 60 * 1.1 + cash * 0.06 + health * 0.35;
   }
 
   /* 玩家当前的塔配置：{ dart: 2, sniper: 1 } */
-  function towerProfile() {
+  function towerProfile(activeTowers) {
     const p = {};
-    for (const t of towers) {
-      if (t.dead) continue;
+    for (const t of activeTowers) {
       p[t.type.id] = (p[t.type.id] || 0) + 1;
     }
     return p;
@@ -644,7 +663,7 @@
     return s;
   }
 
-  function buildWave(w) {
+  function buildWave(w, activeTowers, cash, health, random) {
     const theme = w <= WAVE_THEMES.length
       ? WAVE_THEMES[w - 1]
       : {
@@ -653,7 +672,7 @@
           tip: '强度提升，注意补防空。',
         };
 
-    const power = currentPower();
+    const power = currentPower(activeTowers, cash, health);
     const pressure = clamp((power - 40) / 220, 0, 1);
     const hpMul = (1 + (w - 1) * 0.1) * (1 + pressure * 0.5);
     const speedMul = 1 + (w - 1) * 0.012 + pressure * 0.1;
@@ -663,7 +682,7 @@
      * 2) 反制力低于均值的敌人 = 玩家软肋 → 提高它的权重
      * 3) 用「威胁预算」而不是固定只数，钱多则预算高
      */
-    const profile = towerProfile();
+    const profile = towerProfile(activeTowers);
     const pool = theme.pool;
     const raw = pool.map(id => counterAgainst(profile, id));
     const avg = raw.reduce((a, b) => a + b, 0) / (raw.length || 1);
@@ -673,7 +692,7 @@
       return ENEMY_WEIGHT[id] * softness;
     });
 
-    const budget = Math.round((7 + w * 1.5) * (1 + pressure * 0.25) + money * 0.015);
+    const budget = Math.round((7 + w * 1.5) * (1 + pressure * 0.25) + cash * 0.015);
     const wsum = weights.reduce((a, b) => a + b, 0) || 1;
 
     const units = [];
@@ -688,7 +707,7 @@
 
     // 洗牌，让出怪顺序有变化
     for (let i = units.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(random() * (i + 1));
       [units[i], units[j]] = [units[j], units[i]];
     }
 
@@ -703,21 +722,151 @@
     return { title: theme.title, tip: theme.tip, units, hpMul, speedMul, pressure, summary };
   }
 
-  function startWave() {
-    if (over || running) return;
-    wave++;
-    waveCfg = buildWave(wave);
+  function seedForNextWave() {
+    nextWaveSeed ??= Math.floor(Math.random() * 0x100000000);
+    return nextWaveSeed;
+  }
+
+  function configFor(number, activeTowers, cash, seed) {
+    return buildWave(number, activeTowers, cash, lives, adviceModel.seededRandom(seed));
+  }
+
+  function deploymentScenario(number, seed) {
+    const activeTowers = towers.filter(t => !t.dead);
+    const airPath = [SPAWN, BASE];
+    const extract = (placements, path, cash) => {
+      const config = configFor(number, placements, cash, seed);
+      const features = path && adviceModel.features({
+        number, placements, path, airPath, cash, lives, config, enemyStats, tileSize: T,
+      });
+      return { config, features };
+    };
+    return {
+      current: () => extract(activeTowers, findPath(SPAWN.c, SPAWN.r), money),
+      routeWith: (c, r) => {
+        if (!inBounds(c, r) || grid[r][c] || (r === SPAWN.r && c === SPAWN.c) ||
+            (r === BASE.r && c === BASE.c)) return null;
+        const board = grid.slice();
+        board[r] = grid[r].slice();
+        board[r][c] = 1;
+        return findPath(SPAWN.c, SPAWN.r, board);
+      },
+      candidate: (c, r, type, route) => extract([...activeTowers, { c, r, type }], route, money - type.cost),
+    };
+  }
+
+  function syncDeploymentControls(note) {
+    $forecast.disabled = over || running || paused;
+    $advise.disabled = over || running || paused;
+    if (note !== undefined) $advice.textContent = note;
+  }
+
+  function clearDeployment() {
+    forecastForWave = null;
+    clearRecommendation();
+  }
+
+  function clearRecommendation() {
+    recommended = null;
+    if (!headless && !running && !over) {
+      syncDeploymentControls('开波前可预览敌人，或让 MLP 建议加一座塔。');
+    }
+  }
+
+  function reportDeployment(fell) {
+    const prediction = forecastForWave === null ? '' : `预估 ${forecastForWave.toFixed(1)} 只 · `;
+    const result = fell ? `基地陷落前漏怪 ${leaked} 只` : `实际漏怪 ${leaked} 只`;
+    syncDeploymentControls(`第 ${wave} 波 · ${prediction}${result}`);
+    forecastForWave = null;
+  }
+
+  function forecastWave() {
+    if (over || running || paused) return;
+    recommended = null;
+    const number = wave + 1;
+    const { config, features } = deploymentScenario(number, seedForNextWave()).current();
+    forecastForWave = adviceModel.predict(features, number, config.units.length);
+    const estimate = forecastForWave === null ? '当前布局或波次超出模型范围' :
+      `预计漏怪 ${forecastForWave.toFixed(1)} 只`;
+    syncDeploymentControls(`第 ${number} 波 · ${config.summary}（共 ${config.units.length} 只） · ${estimate}`);
+  }
+
+  function rankDeployments(number, seed) {
+    const scenario = deploymentScenario(number, seed);
+    const current = scenario.current();
+    const baseline = adviceModel.predict(current.features, number, current.config.units.length);
+    if (baseline === null) return { baseline, best: null };
+    const affordable = Object.values(TOWER_TYPES).filter(type => type.cost <= money);
+    let best = null;
+    if (!affordable.length) return { baseline, best: null };
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const route = scenario.routeWith(c, r);
+        if (!route) continue;
+        for (const type of affordable) {
+          const { config, features } = scenario.candidate(c, r, type, route);
+          const prediction = adviceModel.predict(features, number, config.units.length);
+          if (prediction !== null && (!best || prediction < best.prediction ||
+              (prediction === best.prediction && type.cost < best.type.cost))) {
+            best = { c, r, type, prediction, config };
+          }
+        }
+      }
+    }
+    return { baseline, best };
+  }
+
+  function adviseDeployment() {
+    if (over || running || paused) return;
+    recommended = null;
+    const number = wave + 1;
+    const { baseline, best } = rankDeployments(number, seedForNextWave());
+    if (baseline === null) {
+      syncDeploymentControls('当前布局或波次超出模型范围，可点「预测下一波」查看阵容。');
+    } else if (money < Math.min(...Object.values(TOWER_TYPES).map(type => type.cost))) {
+      syncDeploymentControls('金币不足，暂时无法部署新塔。');
+    } else if (!best || best.prediction + 0.25 >= baseline) {
+      syncDeploymentControls(`当前预计漏怪 ${baseline.toFixed(1)} 只，补一座塔的预估改善不足。`);
+    } else {
+      recommended = best;
+      selectedTower = null;
+      selectedType = best.type.id;
+      refreshDeck();
+      refreshBrief();
+      updateTip();
+      syncDeploymentControls(
+        `第 ${number} 波 · ${best.type.name}（${best.type.cost} 金）· 第 ${best.r + 1} 行第 ${best.c + 1} 列\n` +
+        `预计漏怪 ${baseline.toFixed(1)} → ${best.prediction.toFixed(1)} 只。点击黄色格子部署。`,
+      );
+    }
+  }
+
+  function beginWave(number, config) {
+    wave = number;
+    waveCfg = config;
     spawnQueue = waveCfg.units.slice();
     totalThisWave = spawnQueue.length;
     appeared = 0;
+    leaked = 0;
     spawnTimer = 24;
     running = true;
     paused = false;
+    if (headless) return;
     $pause.classList.remove('is-on');
     $pause.textContent = '暂停';
     $start.disabled = true;
     msg(`第 ${wave} 波 · ${waveCfg.title}：${waveCfg.summary}（强度 ${Math.round(waveCfg.pressure * 100)}%）`);
     refreshWavePanel();
+  }
+
+  function startWave() {
+    if (over || running) return;
+    const number = wave + 1;
+    const config = configFor(number, towers.filter(t => !t.dead), money, seedForNextWave());
+    nextWaveSeed = null;
+    recommended = null;
+    beginWave(number, config);
+    syncDeploymentControls('本波进行中。');
   }
 
   /* ============================================================
@@ -747,23 +896,27 @@
     towers = towers.filter(t => !t.dead);
     if (selectedTower && selectedTower.dead) selectedTower = null;
 
-    if (lives <= 0 && !over) {
+    // Offline labels count every breach, even if the base would fall mid-wave.
+    if (!headless && lives <= 0 && !over) {
       over = true;
       running = false;
       $start.disabled = true;
       msg('💥 基地陷落，游戏结束');
+      reportDeployment(true);
     }
 
     if (running && !over && !spawnQueue.length && !enemies.length) {
       running = false;
-      $start.disabled = false;
+      if (!headless) $start.disabled = false;
       const bonus = 12 + wave * 4;
       const interest = interestFor(wave, waveCfg ? waveCfg.pressure : 0);
       money += bonus + interest;
+      if (headless) return;
       msg(`✅ 第 ${wave} 波清除 · 奖励 +${bonus} · 利息 +${interest}`);
       refreshWavePanel();
       refreshDeck();
       refreshBrief();
+      reportDeployment(false);
     }
   }
 
@@ -1206,6 +1359,14 @@
     drawPaths();
     drawSpawnAndBase();
     drawHover();
+    if (recommended) {
+      ctx.save();
+      ctx.strokeStyle = PALETTE.warn;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([7, 4]);
+      ctx.strokeRect(recommended.c * T + 4, recommended.r * T + 4, T - 8, T - 8);
+      ctx.restore();
+    }
     for (const t of towers) drawTower(t);
     drawSelectedTower();
     for (const e of enemies) drawEnemy(e);
@@ -1242,6 +1403,7 @@
   }
 
   function selectTower(id) {
+    if (recommended) clearRecommendation();
     if (selectedType === id) { selectedType = null; } else { selectedType = id; }
     refreshDeck();
     refreshBrief();
@@ -1249,6 +1411,7 @@
   }
 
   function refreshDeck() {
+    if (headless) return;
     let deployed = 0;
     for (const t of towers) if (!t.dead) deployed++;
     $deployed.textContent = UI_TEXT.deckMeta.replace('{n}', deployed);
@@ -1369,7 +1532,6 @@
   let hudMoney = -1;
   let hudLives = -1;
   let hudWave = -1;
-  let hudDeployed = -1;
 
   function updateHud() {
     const moneyChanged = money !== hudMoney;
@@ -1391,39 +1553,56 @@
     return { c, r };
   }
 
-  canvas.addEventListener('mousemove', evt => {
-    const { c, r } = cellFromEvent(evt);
-    hoverCell = inBounds(c, r) ? { c, r } : null;
-  });
-  canvas.addEventListener('mouseleave', () => { hoverCell = null; });
-  canvas.addEventListener('click', evt => {
-    if (over || paused) return;
-    const { c, r } = cellFromEvent(evt);
-    if (!inBounds(c, r)) return;
-    /* 点在有塔的格子上 → 选中它准备出售，而不是继续建塔 */
-    const hit = towers.find(t => !t.dead && t.c === c && t.r === r);
-    if (hit) { selectPlacedTower(hit); return; }
-    buildTower(c, r);
-  });
-  canvas.addEventListener('contextmenu', evt => {
-    evt.preventDefault();
-    selectedType = null;
-    selectedTower = null;
-    refreshDeck();
-    refreshBrief();
-    updateTip();
-  });
+  function bindControls() {
+    canvas.addEventListener('mousemove', evt => {
+      const { c, r } = cellFromEvent(evt);
+      hoverCell = inBounds(c, r) ? { c, r } : null;
+    });
+    canvas.addEventListener('mouseleave', () => { hoverCell = null; });
+    canvas.addEventListener('click', evt => {
+      if (over || paused) return;
+      const { c, r } = cellFromEvent(evt);
+      if (!inBounds(c, r)) return;
+      /* 点在有塔的格子上 → 选中它准备出售，而不是继续建塔 */
+      const hit = towers.find(t => !t.dead && t.c === c && t.r === r);
+      if (hit) { selectPlacedTower(hit); return; }
+      buildTower(c, r);
+    });
+    canvas.addEventListener('contextmenu', evt => {
+      evt.preventDefault();
+      if (recommended) clearRecommendation();
+      selectedType = null;
+      selectedTower = null;
+      refreshDeck();
+      refreshBrief();
+      updateTip();
+    });
 
-  document.addEventListener('keydown', evt => {
-    if (evt.key === 'p' || evt.key === 'P') { togglePause(); return; }
-    if (evt.key === 'Escape') { selectedType = null; selectedTower = null; refreshDeck(); refreshBrief(); updateTip(); return; }
-    if (evt.key === 'x' || evt.key === 'X') { if (selectedTower) sellTower(selectedTower); return; }
-    const n = Number(evt.key);
-    if (n >= 1 && n <= 6) {
-      const ty = Object.values(TOWER_TYPES).find(t => t.slot === n);
-      if (ty) selectTower(ty.id);
-    }
-  });
+    $pause.addEventListener('click', togglePause);
+    $start.addEventListener('click', startWave);
+    $restart.addEventListener('click', newGame);
+    $forecast.addEventListener('click', forecastWave);
+    $advise.addEventListener('click', adviseDeployment);
+
+    document.addEventListener('keydown', evt => {
+      if (evt.key === 'p' || evt.key === 'P') { togglePause(); return; }
+      if (evt.key === 'Escape') {
+        if (recommended) clearRecommendation();
+        selectedType = null;
+        selectedTower = null;
+        refreshDeck();
+        refreshBrief();
+        updateTip();
+        return;
+      }
+      if (evt.key === 'x' || evt.key === 'X') { if (selectedTower) sellTower(selectedTower); return; }
+      const n = Number(evt.key);
+      if (n >= 1 && n <= 6) {
+        const ty = Object.values(TOWER_TYPES).find(t => t.slot === n);
+        if (ty) selectTower(ty.id);
+      }
+    });
+  }
 
   function togglePause() {
     if (over) return;
@@ -1431,11 +1610,8 @@
     $pause.classList.toggle('is-on', paused);
     $pause.textContent = paused ? '继续' : '暂停';
     updateTip();
+    syncDeploymentControls();
   }
-
-  $pause.addEventListener('click', togglePause);
-  $start.addEventListener('click', startWave);
-  $restart.addEventListener('click', newGame);
 
   /* ============================================================
    * 十二、启动
@@ -1466,23 +1642,23 @@
     waveCfg = null;
     appeared = 0;
     totalThisWave = 0;
+    leaked = 0;
+    nextWaveSeed = null;
+    clearDeployment();
 
+    if (headless) return;
     $pause.classList.remove('is-on');
     $pause.textContent = '暂停';
     $start.disabled = false;
     msg('选一座塔，点空地建造。把路封死，它们会开始拆塔。');
 
-    hudMoney = -1; hudLives = -1; hudWave = -1; hudDeployed = -1;
+    hudMoney = -1; hudLives = -1; hudWave = -1;
     refreshDeck();
     refreshBrief();
     refreshWavePanel();
     updateTip();
     updateHud();
   }
-
-  // 先初始化状态，再构建炮塔面板：refreshDeck() 需要 towers 已是数组
-  newGame();
-  buildDeck();
 
   let lastTime = 0;
   let acc = 0;
@@ -1507,6 +1683,35 @@
     if (frame % 5 === 0) updateHud();
     requestAnimationFrame(loop);
   }
+  if (headless) {
+    window.TDSimulation = {
+      board: { cols: COLS, rows: ROWS, spawn: SPAWN, base: BASE },
+      setup: ({ placements, cash, health }) => {
+        newGame();
+        lives = health;
+        money = cash + placements.reduce((sum, tile) => sum + TOWER_TYPES[tile.id].cost, 0);
+        for (const { c, r, id } of placements) {
+          selectedType = id;
+          buildTower(c, r);
+        }
+        if (towers.length !== placements.length) throw new Error('训练布局有非法部署');
+      },
+      scenario: deploymentScenario,
+      recommend: rankDeployments,
+      run: (number, config) => {
+        beginWave(number, config);
+        for (let i = 0; running && i < 16000; i++) update();
+        if (running) throw new Error('模拟波次超时');
+        return { leaked, total: config.units.length };
+      },
+    };
+    return;
+  }
+
+  // 先初始化状态，再构建炮塔面板：refreshDeck() 需要 towers 已是数组
+  newGame();
+  buildDeck();
+  bindControls();
   requestAnimationFrame(loop);
 
   // 调试钩子：?debug=1 时暴露内部状态，便于逐个验证 boss 表现

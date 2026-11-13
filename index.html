@@ -57,6 +57,11 @@
           </div>
           <div class="bar"><i id="spawn-bar" style="width:0%"></i></div>
           <p class="radar-tip" id="wave-tip">点击「开始波次」，让敌人进来。</p>
+          <div class="deployment-controls">
+            <button type="button" class="btn" id="btn-forecast">预测下一波</button>
+            <button type="button" class="btn" id="btn-advise">部署建议</button>
+          </div>
+          <p class="radar-tip deployment-result" id="deployment-result" role="status"></p>
         </section>
 
         <section class="panel deck" aria-label="炮塔部署">
@@ -99,6 +104,8 @@
   </div>
 
   <script src="design-assets.js"></script>
+  <script src="deployment-model.js"></script>
+  <script src="deployment-advice.js"></script>
   <script src="game.js"></script>
 </body>
 </html>
