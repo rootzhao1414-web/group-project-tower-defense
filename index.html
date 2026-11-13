@@ -3,65 +3,101 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>塔防 × AI · Tower Defense</title>
+  <title>塔防 · 敌情雷达</title>
   <link rel="stylesheet" href="style.css" />
+  <script>
+    window.__errlog = [];
+    window.addEventListener('error', function (e) {
+      window.__errlog.push(String(e.message) + ' @' + String(e.filename || '').split('/').pop() + ':' + e.lineno + ':' + e.colno);
+    });
+  </script>
 </head>
 <body>
-  <main class="app">
+  <div class="app">
     <header class="topbar">
-      <h1>🏰 塔防 × AI</h1>
-      <p class="tagline">敌人实时寻路 · 封死通路它们会开始拆塔</p>
+      <div class="brand">
+        <span class="brand-mark">◈</span>
+        <span class="brand-name">塔防 · 敌情雷达</span>
+        <span class="brand-sub">TOWER DEFENSE</span>
+      </div>
+      <div class="stats">
+        <div class="stat">
+          <span class="k">金币</span>
+          <span class="v" id="hud-money">120</span>
+        </div>
+        <div class="stat">
+          <span class="k">生命</span>
+          <span class="v" id="hud-lives">20</span>
+        </div>
+        <div class="stat">
+          <span class="k">波次</span>
+          <span class="v" id="hud-wave">0</span>
+        </div>
+        <button class="pause" id="btn-pause" type="button">暂停</button>
+      </div>
     </header>
 
-    <section class="hud" aria-label="游戏状态">
-      <div class="stat">
-        <span class="stat-label">Money</span>
-        <span class="stat-value" id="money">120</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Lives</span>
-        <span class="stat-value" id="lives">20</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Wave</span>
-        <span class="stat-value" id="wave">0</span>
-      </div>
-      <div class="stat stat-ai">
-        <span class="stat-label">AI 状态</span>
-        <span class="stat-value stat-ai-value" id="ai-status">待命</span>
-      </div>
-    </section>
+    <main class="board">
+      <section class="panel stage-panel" aria-label="战场">
+        <canvas id="game" width="960" height="540"></canvas>
+        <div class="stage-tip" id="tip">选择炮塔 → 点击空地部署</div>
+      </section>
 
-    <div class="stage">
-      <canvas id="game" width="520" height="520"></canvas>
-      <p class="message" id="message">选一座塔，点空地建造。把路封死，敌人就会改拆塔。</p>
-    </div>
+      <aside class="side">
+        <section class="panel radar" aria-label="敌情雷达">
+          <div class="panel-head">
+            <span class="eyebrow">ENEMY RADAR</span>
+            <h2>敌情雷达</h2>
+            <span class="badge" id="wave-title">待命</span>
+          </div>
+          <div class="radar-list" id="radar-list"></div>
+          <div class="radar-meta">
+            <span id="on-field">场上 0 · 待出场 0</span>
+            <span id="spawned">0/0 已出现</span>
+          </div>
+          <div class="bar"><i id="spawn-bar" style="width:0%"></i></div>
+          <p class="radar-tip" id="wave-tip">点击「开始波次」，让敌人进来。</p>
+        </section>
 
-    <footer class="controls">
-      <div class="tower-picker" role="group" aria-label="选择塔类型">
-        <button class="tower-btn is-active" data-tower="gun" type="button">
-          <span class="tower-dot" style="--c:#4cc9f0"></span>
-          <span class="tower-name">机枪塔</span>
-          <span class="tower-cost">30</span>
-        </button>
-        <button class="tower-btn" data-tower="cannon" type="button">
-          <span class="tower-dot" style="--c:#ffe66d"></span>
-          <span class="tower-name">炮台</span>
-          <span class="tower-cost">60</span>
-        </button>
-        <button class="tower-btn" data-tower="frost" type="button">
-          <span class="tower-dot" style="--c:#80ed99"></span>
-          <span class="tower-name">冰塔</span>
-          <span class="tower-cost">50</span>
-        </button>
-      </div>
-      <div class="actions">
-        <button class="btn" id="start" type="button">开始波次</button>
-        <button class="btn btn-ghost" id="restart" type="button">重开</button>
-      </div>
+        <section class="panel deck" aria-label="炮塔部署">
+          <div class="panel-head">
+            <span class="eyebrow">BUILD DECK</span>
+            <h2>炮塔部署</h2>
+            <span class="badge" id="deployed">已部署 0 座</span>
+          </div>
+          <div class="deck-grid" id="deck"></div>
+        </section>
+
+        <section class="panel brief" aria-label="部署简报">
+          <div class="panel-head">
+            <span class="eyebrow">DEPLOYMENT BRIEF</span>
+            <h2 id="brief-name">选择炮塔</h2>
+          </div>
+          <div class="brief-main">
+            <div class="brief-icon" id="brief-icon"></div>
+            <div class="brief-copy">
+              <div class="brief-tag" id="brief-tag">—</div>
+              <p class="brief-desc" id="brief-desc">点击任意炮塔，查看它的定位与参数。</p>
+            </div>
+          </div>
+          <dl class="brief-stats">
+            <div><dt>造价</dt><dd id="brief-cost">—</dd></div>
+            <div><dt>攻击范围</dt><dd id="brief-range">—</dd></div>
+            <div><dt>对空能力</dt><dd id="brief-air">—</dd></div>
+          </dl>
+          <div class="brief-foot">P 暂停 · Esc 取消选择 · 右键取消</div>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="footer">
+      <button class="btn primary" id="btn-start" type="button">开始波次</button>
+      <button class="btn" id="btn-restart" type="button">重开</button>
+      <span class="footer-msg" id="msg">选一座塔，点空地建造。把路封死，它们会开始拆塔。</span>
     </footer>
-  </main>
+  </div>
 
+  <script src="design-assets.js"></script>
   <script src="game.js"></script>
 </body>
 </html>
