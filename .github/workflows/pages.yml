@@ -47,7 +47,7 @@ jobs:
         run: |
           # 只发布游戏本体，不把 README / .gitignore / .github 一起公开
           mkdir -p _site
-          cp index.html style.css game.js _site/
+          cp index.html style.css design-assets.js game.js _site/
           echo "将发布的文件："
           ls -lh _site/
 
