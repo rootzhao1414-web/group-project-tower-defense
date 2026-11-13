@@ -82,8 +82,7 @@ function simulate(window, layout, tile) {
     health,
   });
   const { config, features } = game.scenario(number, waveSeed).current();
-  const { leaked, total } = game.run(number, config);
-  return { features, leaked, total };
+  return { features, ...game.run(number, config) };
 }
 
 if (require.main === module) {

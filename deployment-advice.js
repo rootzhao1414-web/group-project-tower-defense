@@ -2,10 +2,12 @@
 window.TDDeployment = (() => {
   'use strict';
 
-  const { TOWER_TYPES, ENEMY_TYPES } = window.TD;
+  const { TOWER_TYPES, ENEMY_TYPES, SLOW_MUL } = window.TD;
   const towerIds = Object.keys(TOWER_TYPES);
   const enemyIds = Object.keys(ENEMY_TYPES);
   const MAX_WAVE = 24;
+
+  const isFastBoss = type => type?.boss && type.ratios?.speed >= 1.5;
 
   function seededRandom(seed) {
     let state = seed >>> 0;
@@ -86,7 +88,12 @@ window.TDDeployment = (() => {
         const damagePerTile = damage * 60 * tileSize / ((tower.type.rate + 1) * stats.speed);
         earlyDamage += early * damagePerTile;
         lateDamage += late * damagePerTile;
-        slow += (early + late) * (tower.type.slow || 0);
+        if (tower.type.slow) {
+          const slowFrames = tower.type.slowDur * (SLOW_MUL[id] ?? 1);
+          const exposedFrames = (early + late) * 60 * tileSize / stats.speed;
+          const shots = exposedFrames / (tower.type.rate + 1);
+          slow += Math.min(exposedFrames, shots * slowFrames / Math.max(1, count)) * tower.type.slow;
+        }
       }
       const hp = Math.max(1, count) * stats.hp;
       input.push(count, count ? stats.hp : 0, count ? earlyDamage / hp : 0,
@@ -110,5 +117,20 @@ window.TDDeployment = (() => {
     return Math.max(0, Math.min(1, activations[0])) * total;
   }
 
-  return { seededRandom, features, predict, maxWave: MAX_WAVE };
+  function slowSupport(candidate, path, towers, flying) {
+    const allies = towers.filter(tower => !tower.dead && (!flying || tower.type.air));
+    let score = 0;
+    for (const { start, uc, ur, length } of segments(path).pieces) {
+      const c = start.c + uc * length / 2;
+      const r = start.r + ur * length / 2;
+      const inRange = tower => Math.hypot(c - tower.c, r - tower.r) <= tower.type.range;
+      if (!inRange(candidate)) continue;
+      const firepower = allies.reduce((sum, tower) =>
+        sum + (inRange(tower) ? tower.type.dmg / (tower.type.rate + 1) : 0), 0);
+      score += length * (1 + firepower);
+    }
+    return score;
+  }
+
+  return { seededRandom, features, predict, slowSupport, isFastBoss, maxWave: MAX_WAVE };
 })();
