@@ -194,19 +194,60 @@ window.TD = (() => {
   /* ----------------------------------------------------------
    * D. 波次编队（design 稿的「第 6 波 · 巨像降临」为蓝本）
    * ---------------------------------------------------------- */
-  const WAVE_BLUEPRINTS = [
-    { wave: 1, title: '试探', units: [['wraith', 8]], tip: '先铺两座弩塔，看清它们的路线。' },
-    { wave: 2, title: '疾行', units: [['wraith', 10], ['runner', 2]], tip: '疾影会贴着边线冲刺。' },
-    { wave: 3, title: '重装', units: [['armored', 3], ['wraith', 8]], tip: '重甲兵怕炮塔的溅射，别用弩塔硬啃。' },
-    { wave: 4, title: '空袭', units: [['flyer', 3], ['runner', 4], ['wraith', 6]], tip: '飞行单位只能被对空炮塔命中。' },
-    { wave: 5, title: '铁墙', units: [['armored', 5], ['flyer', 3]], tip: '狙击塔穿甲，配一座。' },
-    { wave: 6, title: '巨像降临', units: [['colossus', 1], ['wraith', 8]], tip: '深渊巨像的护甲是 8，只有狙击塔能完整打穿。' },
-    { wave: 7, title: '暗影突袭', units: [['shadowlord', 1], ['runner', 6]], tip: '暗影君主跑得比疾影还快，但护甲只有一半——先减速再集火。' },
-    { wave: 8, title: '风暴压境', units: [['stormlord', 1], ['flyer', 4]], tip: '风暴领主拆塔最快，别让它贴近炮塔。' },
+  /* ----------------------------------------------------------
+   * D-1. 特攻耦合（塔 → 敌 的伤害倍率）
+   *   1.0 为基准；>1 是克制，<1 是被反制。
+   *   数值依据：塔的机制与该敌人的特质是否对口。
+   *     · cannon 溅射 → 成群杂兵；对空为 0（代码里另有拦截）
+   *     · sniper 穿甲 → 重甲 / 巨像 / 拆塔机器
+   *     · frost 减速 → 高速单位（靠 SLOW_MUL 延长减速时长）
+   *     · tesla 链式 → 扎堆的杂兵
+   *     · dart 通用，打不穿甲
+   * ---------------------------------------------------------- */
+  const COUNTER = {
+    dart:   { wraith: 1.00, armored: 0.80, runner: 1.10, flyer: 1.00, colossus: 0.70, shadowlord: 1.10, stormlord: 0.90 },
+    cannon: { wraith: 1.45, armored: 1.00, runner: 0.70, flyer: 0.00, colossus: 0.85, shadowlord: 0.70, stormlord: 0.80 },
+    frost:  { wraith: 1.00, armored: 0.90, runner: 1.30, flyer: 0.90, colossus: 0.85, shadowlord: 1.40, stormlord: 0.90 },
+    tesla:  { wraith: 1.30, armored: 0.85, runner: 0.90, flyer: 1.00, colossus: 0.80, shadowlord: 1.00, stormlord: 0.90 },
+    sniper: { wraith: 0.90, armored: 1.60, runner: 0.80, flyer: 0.90, colossus: 1.50, shadowlord: 0.90, stormlord: 1.30 },
+  };
+
+  // 减速时长倍率：高机动单位被减速的收益更大
+  const SLOW_MUL = {
+    runner: 1.5, shadowlord: 1.6, colossus: 1.2,
+  };
+
+  // 敌人特质：给玩家看的「软肋」提示，也给配波器算权重
+  const ENEMY_TRAITS = {
+    wraith:     { tags: ['swarm'],  label: '集群',     tip: '溅射／连锁清场' },
+    armored:    { tags: ['armor'],  label: '重甲',     tip: '需要穿甲，或高单发' },
+    runner:     { tags: ['fast'],   label: '高速',     tip: '先减速再集火' },
+    flyer:      { tags: ['air'],    label: '飞行',     tip: '只有对空塔能打' },
+    colossus:   { tags: ['armor', 'heavy'], label: '重装堡垒', tip: '穿甲 + 持续输出' },
+    shadowlord: { tags: ['fast', 'evade'],  label: '高速刺客', tip: '减速锁住，别让它摸到基地' },
+    stormlord:  { tags: ['siege', 'heavy'], label: '拆塔机器', tip: '远程压制，别让它贴脸' },
+  };
+
+  /* ----------------------------------------------------------
+   * D-2. 波次主题（只定「能出什么」和节奏，具体数量交给配波器）
+   *   pool 是该波允许出现的敌人池；boss 固定出场 1 只
+   * ---------------------------------------------------------- */
+  const WAVE_THEMES = [
+    { wave: 1, title: '试探',   pool: ['wraith'],                     tip: '先铺两座弩塔，看清它们的路线。' },
+    { wave: 2, title: '疾行',   pool: ['wraith', 'runner'],           tip: '疾影会贴着边线冲刺。' },
+    { wave: 3, title: '重装',   pool: ['armored', 'wraith'],          tip: '重甲兵怕炮塔的溅射，别用弩塔硬啃。' },
+    { wave: 4, title: '空袭',   pool: ['flyer', 'runner', 'wraith'],  tip: '飞行单位只能被对空炮塔命中。' },
+    { wave: 5, title: '铁墙',   pool: ['armored', 'flyer'],           tip: '狙击塔穿甲，配一座。' },
+    { wave: 6, title: '巨像降临', pool: ['wraith', 'runner'],   boss: 'colossus',   tip: '深渊巨像的护甲是 8，只有狙击塔能完整打穿。' },
+    { wave: 7, title: '暗影突袭', pool: ['runner', 'wraith'],   boss: 'shadowlord', tip: '暗影君主跑得比疾影还快，先减速再集火。' },
+    { wave: 8, title: '风暴压境', pool: ['flyer', 'armored'],   boss: 'stormlord',  tip: '风暴领主拆塔最快，别让它贴近炮塔。' },
   ];
 
-  // w > 6 之后循环使用，强度递增
-  const WAVE_TEMPLATES = WAVE_BLUEPRINTS.map(w => w.units);
+  // 每种敌人占多少「威胁预算」，配波器按它分配数量
+  const ENEMY_WEIGHT = {
+    wraith: 1.0, runner: 0.85, armored: 1.25, flyer: 1.0,
+    colossus: 5.0, shadowlord: 5.0, stormlord: 5.0,
+  };
 
   /* ----------------------------------------------------------
    * E. UI 文案（设计稿原文）
@@ -253,5 +294,10 @@ window.TD = (() => {
     ghost: S('<path d="M5 20V10a7 7 0 0 1 14 0v10l-2.3-2-2.4 2-2.3-2-2.4 2L7.3 18z"/><circle cx="9.5" cy="11" r="1"/><circle cx="14.5" cy="11" r="1"/>'),
   };
 
-  return { PALETTE, ATTACK_STYLES, BOSS_BASE, ENEMY_TYPES, TOWER_TYPES, WAVE_BLUEPRINTS, WAVE_TEMPLATES, UI_TEXT, ICONS };
+  return {
+    PALETTE, ATTACK_STYLES, BOSS_BASE,
+    ENEMY_TYPES, ENEMY_TRAITS, ENEMY_WEIGHT,
+    TOWER_TYPES, COUNTER, SLOW_MUL,
+    WAVE_THEMES, UI_TEXT, ICONS,
+  };
 })();

@@ -451,6 +451,9 @@ body {
 
 .brief-stats div { min-width: 0; }
 
+/* 「特攻目标」独占一整行，名字多时不挤第三列 */
+.brief-stats .brief-wide { grid-column: 1 / -1; }
+
 .brief-stats dt {
   font-size: 10px;
   color: var(--dim);

@@ -10,7 +10,12 @@
 (() => {
   'use strict';
 
-  const { PALETTE, ATTACK_STYLES, BOSS_BASE, ENEMY_TYPES, TOWER_TYPES, WAVE_BLUEPRINTS, WAVE_TEMPLATES, UI_TEXT, ICONS } = window.TD;
+  const {
+    PALETTE, ATTACK_STYLES, BOSS_BASE,
+    ENEMY_TYPES, ENEMY_TRAITS, ENEMY_WEIGHT,
+    TOWER_TYPES, COUNTER, SLOW_MUL,
+    WAVE_THEMES, UI_TEXT, ICONS,
+  } = window.TD;
 
   /* ============================================================
    * 零、常量与 DOM
@@ -51,6 +56,7 @@
   const $briefCost = $('brief-cost');
   const $briefRange = $('brief-range');
   const $briefAir = $('brief-air');
+  const $briefCounter = $('brief-counter');
   const $tip = $('tip');
 
   /* ============================================================
@@ -232,10 +238,18 @@
 
   function damageEnemy(e, rawDmg, opts = {}) {
     if (e.dead) return;
+
+    // —— 特攻耦合：同一发攻击打不同敌人，伤害倍率不同 ——
+    const tower = opts.tower;
+    if (tower === 'cannon' && e.flying) return;        // 震荡炮塔打不到空中
+    const mul = tower && COUNTER[tower] ? (COUNTER[tower][e.id] ?? 1) : 1;
+    if (mul <= 0) return;
+
     const armor = opts.pierceArmor ? 0 : e.armor;
-    const dmg = Math.max(1, rawDmg - armor);
+    const dmg = Math.max(1, Math.round(rawDmg * mul) - armor);
     e.hp -= dmg;
     e.hitFlash = 6;
+    if (mul >= 1.3) addParticles(e.x, e.y, PALETTE.warn, 3); // 克制命中：橙色火花
     if (dmg > 0) addParticles(e.x, e.y, e.type.color, 2);
     if (e.hp <= 0) {
       e.dead = true;
@@ -489,13 +503,17 @@
       b.angle = Math.atan2(dy, dx);
 
       if (d < 9) {
-        damageEnemy(b.target, b.dmg, { pierceArmor: b.pierceArmor });
-        if (b.slow) b.target.slowT = b.slowDur;
+        damageEnemy(b.target, b.dmg, { pierceArmor: b.pierceArmor, tower: b.kind });
+        // 减速时长也吃特攻：对高速单位效果更久
+        if (b.slow) {
+          const slowMul = SLOW_MUL[b.target.id] || 1;
+          b.target.slowT = Math.round(b.slowDur * slowMul);
+        }
         if (b.splash > 0) {
           for (const o of enemies) {
             if (o === b.target || o.dead || o.flying) continue;
             if (Math.hypot(o.x - b.target.x, o.y - b.target.y) <= b.splash) {
-              damageEnemy(o, b.dmg * 0.5);
+              damageEnemy(o, b.dmg * 0.5, { tower: b.kind });
             }
           }
           addParticles(b.x, b.y, b.color, 6);
@@ -548,28 +566,85 @@
     return towers.length * 6 + dps * 60 * 1.1 + money * 0.06 + lives * 0.35;
   }
 
+  /* 玩家当前的塔配置：{ dart: 2, sniper: 1 } */
+  function towerProfile() {
+    const p = {};
+    for (const t of towers) {
+      if (t.dead) continue;
+      p[t.type.id] = (p[t.type.id] || 0) + 1;
+    }
+    return p;
+  }
+
+  /* 玩家对某种敌人的反制力（越大越不怕它） */
+  function counterAgainst(profile, enemyId) {
+    let s = 0;
+    for (const id in profile) {
+      const ty = TOWER_TYPES[id];
+      if (!ty) continue;
+      const dps = ty.dmg / ty.rate;
+      s += profile[id] * dps * (COUNTER[id]?.[enemyId] ?? 1);
+    }
+    return s;
+  }
+
   function buildWave(w) {
-    const bp = w <= WAVE_BLUEPRINTS.length
-      ? WAVE_BLUEPRINTS[w - 1]
-      : { title: `${WAVE_BLUEPRINTS[(w - 1) % WAVE_BLUEPRINTS.length].title} · 强化`, tip: '强度提升，注意补防空。', units: WAVE_TEMPLATES[(w - 1) % WAVE_BLUEPRINTS.length] };
+    const theme = w <= WAVE_THEMES.length
+      ? WAVE_THEMES[w - 1]
+      : {
+          ...WAVE_THEMES[(w - 1) % WAVE_THEMES.length],
+          title: `${WAVE_THEMES[(w - 1) % WAVE_THEMES.length].title} · 强化`,
+          tip: '强度提升，注意补防空。',
+        };
 
     const power = currentPower();
     const pressure = clamp((power - 40) / 220, 0, 1);
     const hpMul = (1 + (w - 1) * 0.1) * (1 + pressure * 0.5);
     const speedMul = 1 + (w - 1) * 0.012 + pressure * 0.1;
 
+    /* —— 智能配比 ——
+     * 1) 算玩家对池内每种敌人的反制力，取均值做基准
+     * 2) 反制力低于均值的敌人 = 玩家软肋 → 提高它的权重
+     * 3) 用「威胁预算」而不是固定只数，钱多则预算高
+     */
+    const profile = towerProfile();
+    const pool = theme.pool;
+    const raw = pool.map(id => counterAgainst(profile, id));
+    const avg = raw.reduce((a, b) => a + b, 0) / (raw.length || 1);
+    const weights = pool.map((id, i) => {
+      const ratio = avg > 0 ? raw[i] / avg : 1;
+      const softness = clamp(1.55 - ratio * 0.42, 0.45, 1.7);
+      return ENEMY_WEIGHT[id] * softness;
+    });
+
+    const budget = Math.round((7 + w * 1.5) * (1 + pressure * 0.25) + money * 0.015);
+    const wsum = weights.reduce((a, b) => a + b, 0) || 1;
+
     const units = [];
-    for (const [id, n] of bp.units) {
-      const count = Math.max(1, Math.round(n * (1 + (w - 1) * 0.04) * (1 + pressure * 0.35)));
-      for (let i = 0; i < count; i++) units.push(id);
+    for (let i = 0; i < pool.length; i++) {
+      const share = weights[i] / wsum;
+      const n = Math.max(1, Math.round((budget * share) / ENEMY_WEIGHT[pool[i]]));
+      for (let k = 0; k < n; k++) units.push(pool[i]);
     }
+
+    // Boss 固定 1 只，不参与预算分配，避免被压力系数放大成两三只
+    if (theme.boss) units.push(theme.boss);
+
     // 洗牌，让出怪顺序有变化
     for (let i = units.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [units[i], units[j]] = [units[j], units[i]];
     }
 
-    return { title: bp.title, tip: bp.tip, units, hpMul, speedMul, pressure };
+    // 给玩家看这一波到底派了什么
+    const tally = {};
+    for (const id of units) tally[id] = (tally[id] || 0) + 1;
+    const summary = Object.entries(tally)
+      .sort((a, b) => b[1] - a[1])
+      .map(([id, n]) => `${ENEMY_TYPES[id].name}×${n}`)
+      .join(' ');
+
+    return { title: theme.title, tip: theme.tip, units, hpMul, speedMul, pressure, summary };
   }
 
   function startWave() {
@@ -585,7 +660,7 @@
     $pause.classList.remove('is-on');
     $pause.textContent = '暂停';
     $start.disabled = true;
-    msg(`第 ${wave} 波 · ${waveCfg.title} 来袭（强度 ${Math.round(waveCfg.pressure * 100)}%）`);
+    msg(`第 ${wave} 波 · ${waveCfg.title}：${waveCfg.summary}（强度 ${Math.round(waveCfg.pressure * 100)}%）`);
     refreshWavePanel();
   }
 
@@ -1114,6 +1189,7 @@
       $briefCost.textContent = '—';
       $briefRange.textContent = '—';
       $briefAir.textContent = '—';
+      $briefCounter.textContent = '—';
       return;
     }
     const ty = TOWER_TYPES[selectedType];
@@ -1125,6 +1201,12 @@
     $briefCost.textContent = String(ty.cost);
     $briefRange.textContent = `${ty.range.toFixed(1)} 格`;
     $briefAir.textContent = ty.air ? UI_TEXT.airYes : UI_TEXT.airNo;
+
+    // 特攻：这条塔把哪些敌人打得更疼
+    const strong = Object.entries(COUNTER[ty.id] || {})
+      .filter(([, mul]) => mul >= 1.25)
+      .map(([id]) => ENEMY_TYPES[id].name);
+    $briefCounter.textContent = strong.length ? strong.join(' · ') : '无特别克制';
   }
 
   function updateTip() {
