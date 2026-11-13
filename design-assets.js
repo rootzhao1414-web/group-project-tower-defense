@@ -40,44 +40,102 @@ window.TD = (() => {
   };
 
   /* ----------------------------------------------------------
-   * B. 敌人类型
+   * B. 敌人攻击特性（纯表现层）
+   *    只决定「怎么打」的观感：前摇、扑击幅度、火花数量、镜头震动。
+   *    不改 hp / speed / armor / reward / 攻击间隔 / 伤害，数值仍由
+   *    ENEMY_TYPES 与 BOSS_BASE 决定。
+   * ---------------------------------------------------------- */
+  const ATTACK_STYLES = {
+    claw: {
+      label: '幽灵爪击', color: PALETTE.enemy,
+      windup: 10, lunge: 7, shake: 0, puffs: 4, mark: 'claw',
+      desc: '身形前扑，在塔身上留下三道爪痕。',
+    },
+    slam: {
+      label: '盾牌猛撞', color: PALETTE.enemyArmor,
+      windup: 14, lunge: 4, shake: 1.5, puffs: 6, mark: 'spark',
+      desc: '压低重心用肩甲撞上去，火星四溅。',
+    },
+    stab: {
+      label: '疾影连刺', color: PALETTE.enemyFast,
+      windup: 6, lunge: 11, shake: 0, puffs: 3, mark: 'dash',
+      desc: '连续两次短突刺，几乎是贴着脸刺出去的。',
+    },
+    dive: {
+      label: '俯冲啄击', color: PALETTE.enemyAir,
+      windup: 8, lunge: 9, shake: 0, puffs: 4, mark: 'feather',
+      desc: '从上方滑下来啄一口，再拉回去。',
+    },
+    quake: {
+      label: '大地震击', color: PALETTE.enemyBoss,
+      windup: 18, lunge: 0, shake: 6, puffs: 12, mark: 'ring',
+      desc: '抬脚砸地，一圈冲击波扫过整段地面。',
+    },
+  };
+
+  /* Boss 三围基准：实际数值 = 基准 × 该 boss 的 ratios 占比 */
+  const BOSS_BASE = { hp: 820, speed: 30, attack: 7, armor: 5, reward: 80 };
+
+  /* ----------------------------------------------------------
+   * C. 敌人类型
    *    hp / speed(px/s) / armor(每发减伤) / flying / reward
+   *    boss 不写 speed/armor，改由 ratios 从 BOSS_BASE 推导
    * ---------------------------------------------------------- */
   const ENEMY_TYPES = {
     wraith: {
       id: 'wraith', name: '裂魂者', short: 'WRAITH', icon: 'ghost',
       hp: 34, speed: 52, armor: 0, flying: false, reward: 6,
-      color: PALETTE.enemy, radius: 8,
+      color: PALETTE.enemy, radius: 8, attack: 'claw',
       desc: '深渊裂缝里爬出的杂兵，数量多、胆子小，一碰就碎。',
       source: 'extended',
     },
     armored: {
       id: 'armored', name: '重甲兵', short: 'HEAVY', icon: 'shield',
       hp: 118, speed: 36, armor: 5, flying: false, reward: 12,
-      color: PALETTE.enemyArmor, radius: 10,
+      color: PALETTE.enemyArmor, radius: 10, attack: 'slam',
       desc: '顶着三层装甲板推进。单发伤害会被削掉 5 点，需要高伤或穿甲。',
       source: 'design',
     },
     runner: {
       id: 'runner', name: '疾影', short: 'RUNNER', icon: 'bolt',
       hp: 22, speed: 86, armor: 0, flying: false, reward: 5,
-      color: PALETTE.enemyFast, radius: 6.5,
+      color: PALETTE.enemyFast, radius: 6.5, attack: 'stab',
       desc: '速度是常规单位的两倍，专挑防线薄弱处冲刺。',
       source: 'extended',
     },
     flyer: {
       id: 'flyer', name: '虚空蝠', short: 'FLYER', icon: 'wing',
       hp: 44, speed: 68, armor: 0, flying: true, reward: 9,
-      color: PALETTE.enemyAir, radius: 8,
+      color: PALETTE.enemyAir, radius: 8, attack: 'dive',
       desc: '贴地飞行的空中单位，只吃得到「对空」炮塔的伤害。',
       source: 'extended',
     },
     colossus: {
       id: 'colossus', name: '深渊巨像', short: 'COLOSSUS', icon: 'skull',
-      hp: 820, speed: 24, armor: 8, flying: false, reward: 80,
-      color: PALETTE.enemyBoss, radius: 16, boss: true,
-      desc: '第 6 波降临的巨型敌人。血厚、甲厚、走得慢，是整场战斗的节拍器。',
+      boss: true, archetype: '攻城型', attack: 'quake',
+      ratios: { speed: 0.8, attack: 1.4, defense: 1.6 },
+      hp: 820, reward: 80, flying: false,
+      color: PALETTE.enemyBoss, radius: 16,
+      desc: '第 6 波降临。三围里防御占比最高（1.6 倍基数），走得像山崩一样慢，拆塔却极狠。',
       source: 'design',
+    },
+    shadowlord: {
+      id: 'shadowlord', name: '暗影君主', short: 'SHADOWLORD', icon: 'ghost',
+      boss: true, archetype: '突袭型', attack: 'claw',
+      ratios: { speed: 1.8, attack: 1.0, defense: 0.5 },
+      hp: 820, reward: 80, flying: false,
+      color: '#c06bff', radius: 14,
+      desc: '第 7 波降临。速度占比最高（1.8 倍）、护甲只有一半，眨眼间就摸到基地。',
+      source: 'extended',
+    },
+    stormlord: {
+      id: 'stormlord', name: '风暴领主', short: 'STORMLORD', icon: 'bolt',
+      boss: true, archetype: '压制型', attack: 'quake',
+      ratios: { speed: 1.1, attack: 1.8, defense: 0.9 },
+      hp: 820, reward: 80, flying: false,
+      color: '#7fe3ff', radius: 15,
+      desc: '第 8 波降临。攻击占比最高（1.8 倍），拆塔速度最快，但走得不算快。',
+      source: 'extended',
     },
   };
 
@@ -143,6 +201,8 @@ window.TD = (() => {
     { wave: 4, title: '空袭', units: [['flyer', 3], ['runner', 4], ['wraith', 6]], tip: '飞行单位只能被对空炮塔命中。' },
     { wave: 5, title: '铁墙', units: [['armored', 5], ['flyer', 3]], tip: '狙击塔穿甲，配一座。' },
     { wave: 6, title: '巨像降临', units: [['colossus', 1], ['wraith', 8]], tip: '深渊巨像的护甲是 8，只有狙击塔能完整打穿。' },
+    { wave: 7, title: '暗影突袭', units: [['shadowlord', 1], ['runner', 6]], tip: '暗影君主跑得比疾影还快，但护甲只有一半——先减速再集火。' },
+    { wave: 8, title: '风暴压境', units: [['stormlord', 1], ['flyer', 4]], tip: '风暴领主拆塔最快，别让它贴近炮塔。' },
   ];
 
   // w > 6 之后循环使用，强度递增
@@ -193,5 +253,5 @@ window.TD = (() => {
     ghost: S('<path d="M5 20V10a7 7 0 0 1 14 0v10l-2.3-2-2.4 2-2.3-2-2.4 2L7.3 18z"/><circle cx="9.5" cy="11" r="1"/><circle cx="14.5" cy="11" r="1"/>'),
   };
 
-  return { PALETTE, ENEMY_TYPES, TOWER_TYPES, WAVE_BLUEPRINTS, WAVE_TEMPLATES, UI_TEXT, ICONS };
+  return { PALETTE, ATTACK_STYLES, BOSS_BASE, ENEMY_TYPES, TOWER_TYPES, WAVE_BLUEPRINTS, WAVE_TEMPLATES, UI_TEXT, ICONS };
 })();

@@ -137,9 +137,19 @@ body {
 
 .side {
   display: grid;
-  gap: 10px;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  gap: 8px;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+}
+
+.side > .panel { padding: 12px; }
+
+/* 雷达卡片吃掉剩余高度，敌人种类多时只有列表内部滚动 */
+.panel.radar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 /* ---------- 面板 ---------- */
@@ -233,15 +243,18 @@ body {
 .radar-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  flex: 1 1 auto;
   min-height: 38px;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .radar-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 10px;
+  padding: 5px 10px;
   border-radius: 10px;
   border: 1px solid var(--line-soft);
   background: rgba(255, 255, 255, 0.02);
@@ -276,7 +289,7 @@ body {
   justify-content: space-between;
   font-size: 11px;
   color: var(--dim);
-  margin: 6px 2px 4px;
+  margin: 4px 2px 3px;
 }
 
 .bar {
@@ -295,7 +308,7 @@ body {
 }
 
 .radar-tip {
-  margin: 6px 2px 0;
+  margin: 4px 2px 0;
   font-size: 11.5px;
   line-height: 1.6;
   color: var(--dim);
@@ -395,7 +408,7 @@ body {
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .brief-icon {
@@ -432,7 +445,7 @@ body {
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
   margin: 0;
-  padding: 8px 0 0;
+  padding: 6px 0 0;
   border-top: 1px solid var(--line-soft);
 }
 
@@ -452,8 +465,8 @@ body {
 }
 
 .brief-foot {
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
   border-top: 1px solid var(--line-soft);
   font-size: 10.5px;
   color: var(--dim);
