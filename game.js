@@ -556,7 +556,7 @@
       forecastForWave = accepted.result?.leaked ?? accepted.prediction;
       simulatedForecast = Boolean(accepted.result);
       const estimate = accepted.result
-        ? `整波模拟伤害 ${accepted.result.baseDamage} 点 · Boss 漏怪 ${accepted.result.bossLeaked} 只`
+        ? `整波模拟漏怪 ${accepted.result.leaked} 只 · 其中 Boss ${accepted.result.bossLeaked} 只`
         : `预计漏怪 ${accepted.prediction.toFixed(1)} 只`;
       syncDeploymentControls(`已部署${type.name} · ${accepted.config.summary} · ${estimate}`);
     }
@@ -825,8 +825,7 @@
           const prediction = adviceModel.predict(features, number, config.units.length);
           if (prediction === null) continue;
           const candidate = { c, r, type, prediction, config };
-          if (!best || prediction < best.prediction ||
-              (prediction === best.prediction && type.cost < best.type.cost)) {
+          if (!best || prediction < best.prediction) {
             best = candidate;
           }
           if (fastBoss) {
@@ -858,16 +857,12 @@
     battle.setup({ placements, cash: money, health: lives });
     const original = battle.run(number, config);
     if (!original) return { baseline, best: null, bossCheckTimedOut: true };
-    const compare = (a, b) => a.baseDamage - b.baseDamage || a.bossLeaked - b.bossLeaked;
     let best = null;
     for (const candidate of candidates) {
       const { c, r, type } = candidate;
       battle.setup({ placements: [...placements, { c, r, id: type.id }], cash: money - type.cost, health: lives });
       const result = battle.run(number, candidate.config);
-      if (!result) continue;
-      if (compare(result, original) >= 0) continue;
-      const order = best ? compare(result, best.result) : -1;
-      if (order < 0 || (order === 0 && type.cost < best.type.cost)) {
+      if (result && result.leaked < (best?.result.leaked ?? original.leaked)) {
         best = { ...candidate, result };
       }
     }
@@ -886,7 +881,7 @@
     } else if (bossCheckTimedOut) {
       syncDeploymentControls('高速 Boss 模拟超时，可查看「预测下一波」的估计。');
     } else if (original && !best) {
-      syncDeploymentControls(`${fastBoss.name}来袭 · 整波模拟伤害 ${original.baseDamage} 点 · Boss 漏怪 ${original.bossLeaked} 只。备选加塔方案未改善战果。`);
+      syncDeploymentControls(`${fastBoss.name}来袭 · 整波模拟漏怪 ${original.leaked} 只 · 其中 Boss ${original.bossLeaked} 只。备选加塔方案未减少漏怪。`);
     } else if (!best || (!original && best.prediction + 0.25 >= baseline)) {
       syncDeploymentControls(`当前预计漏怪 ${baseline.toFixed(1)} 只，补一座塔的预估改善不足。`);
     } else {
@@ -897,7 +892,7 @@
       refreshBrief();
       updateTip();
       const estimate = original
-        ? `${fastBoss.name}来袭 · 整波模拟伤害 ${original.baseDamage} → ${best.result.baseDamage} 点 · Boss 漏怪 ${original.bossLeaked} → ${best.result.bossLeaked} 只。`
+        ? `${fastBoss.name}来袭 · 整波模拟漏怪 ${original.leaked} → ${best.result.leaked} 只 · 其中 Boss ${original.bossLeaked} → ${best.result.bossLeaked} 只。`
         : `预计漏怪 ${baseline.toFixed(1)} → ${best.prediction.toFixed(1)} 只。`;
       syncDeploymentControls(
         `第 ${number} 波 · ${best.type.name}（${best.type.cost} 金）· 第 ${best.r + 1} 行第 ${best.c + 1} 列\n` +

@@ -34,8 +34,7 @@ for (const layout of layouts(window, count, 261115)) {
   }
   if (original) {
     assert.deepEqual(keep, { ...original });
-    assert.ok(advised.baseDamage < keep.baseDamage ||
-      (advised.baseDamage === keep.baseDamage && advised.bossLeaked <= keep.bossLeaked));
+    assert.ok(best ? advised.leaked < keep.leaked : advised.leaked === keep.leaked);
     const mlp = mlpBest.prediction + 0.25 < baseline
       ? simulate(window, layout, { c: mlpBest.c, r: mlpBest.r, id: mlpBest.type.id })
       : keep;
@@ -53,7 +52,9 @@ console.log(`相对保持原样，${improved} 局改善，${worse} 局变差，$
 if (bossExamples.length) {
   const damage = key => bossExamples.reduce((sum, row) => sum + row[key].baseDamage, 0);
   const bosses = key => bossExamples.reduce((sum, row) => sum + row[key].bossLeaked, 0);
+  const leaked = key => bossExamples.reduce((sum, row) => sum + row[key].leaked, 0);
   console.log(`${bossExamples.length} 个高速 Boss 布局 · 仅 MLP / 模拟复核`);
-  console.log(`基地累计掉血 ${damage('mlp')} / ${damage('advised')} 点 · Boss 漏怪 ${bosses('mlp')} / ${bosses('advised')} 只 · ` +
+  console.log(`累计漏怪 ${leaked('mlp')} / ${leaked('advised')} 只 · 基地累计掉血 ${damage('mlp')} / ${damage('advised')} 点 · ` +
+    `Boss 漏怪 ${bosses('mlp')} / ${bosses('advised')} 只 · ` +
     `推荐霜冻棱镜 ${bossExamples.filter(row => row.frost).length} 局`);
 }
