@@ -117,20 +117,5 @@ window.TDDeployment = (() => {
     return Math.max(0, Math.min(1, activations[0])) * total;
   }
 
-  function slowSupport(candidate, path, towers, flying) {
-    const allies = towers.filter(tower => !tower.dead && (!flying || tower.type.air));
-    let score = 0;
-    for (const { start, uc, ur, length } of segments(path).pieces) {
-      const c = start.c + uc * length / 2;
-      const r = start.r + ur * length / 2;
-      const inRange = tower => Math.hypot(c - tower.c, r - tower.r) <= tower.type.range;
-      if (!inRange(candidate)) continue;
-      const firepower = allies.reduce((sum, tower) =>
-        sum + (inRange(tower) ? tower.type.dmg / (tower.type.rate + 1) : 0), 0);
-      score += length * (1 + firepower);
-    }
-    return score;
-  }
-
-  return { seededRandom, features, predict, slowSupport, isFastBoss, maxWave: MAX_WAVE };
+  return { seededRandom, features, predict, isFastBoss, maxWave: MAX_WAVE };
 })();

@@ -7,7 +7,7 @@
  *   3. 暂停、快捷键、部署简报、敌情雷达实时列表
  *   4. 视觉与文案对齐设计稿的深蓝霓虹风格
  * ============================================================ */
-(function createGame(simulation) {
+(() => {
   'use strict';
 
   const {
@@ -30,7 +30,7 @@
   const STEP = 1000 / 60;
   const MAX_STEPS = 6;
 
-  const headless = simulation || typeof document === 'undefined';
+  const headless = typeof document === 'undefined';
   const $ = id => headless ? null : document.getElementById(id);
   const canvas = $('game');
   const ctx = canvas?.getContext('2d');
@@ -95,7 +95,6 @@
   let bossLeaked;
   let nextWaveSeed;
   let forecastForWave;
-  let simulatedForecast;
   let recommended;
 
   /* ============================================================
@@ -553,7 +552,7 @@
       ? recommended : null;
     clearDeployment();
     if (accepted) {
-      const estimate = recordForecast(accepted.prediction, accepted.result);
+      const estimate = recordForecast(accepted.prediction);
       syncDeploymentControls(`已部署${type.name} · ${accepted.config.summary} · ${estimate}`);
     }
     refreshDeck();
@@ -766,7 +765,6 @@
 
   function clearDeployment() {
     forecastForWave = null;
-    simulatedForecast = false;
     clearRecommendation();
   }
 
@@ -778,39 +776,20 @@
   }
 
   function reportDeployment(fell) {
-    const prediction = forecastForWave === null ? '' : simulatedForecast
-      ? `模拟漏怪 ${forecastForWave} 只 · `
-      : `预估 ${forecastForWave.toFixed(1)} 只 · `;
+    const prediction = forecastForWave === null ? '' : `MLP 预估漏怪 ${forecastForWave.toFixed(1)} 只 · `;
     const result = fell ? `基地陷落前漏怪 ${leaked} 只` : `实际漏怪 ${leaked} 只`;
     const bosses = bossLeaked ? `（含 Boss ${bossLeaked} 只）` : '';
     syncDeploymentControls(`第 ${wave} 波 · ${prediction}${result}${bosses}`);
     forecastForWave = null;
-    simulatedForecast = false;
   }
 
-  function recordForecast(prediction, result) {
-    forecastForWave = result?.leaked ?? prediction;
-    simulatedForecast = Boolean(result);
-    if (result) return `整波模拟漏怪 ${result.leaked} 只 · 其中 Boss ${result.bossLeaked} 只`;
-    return prediction === null ? '当前布局或波次超出模型范围' : `预计漏怪 ${prediction.toFixed(1)} 只`;
+  function recordForecast(prediction) {
+    forecastForWave = prediction;
+    return prediction === null ? '当前布局或波次超出模型范围' : `MLP 预计漏怪 ${prediction.toFixed(1)} 只`;
   }
 
-  function assessCurrentDeployment(number, { config, features }) {
-    const baseline = adviceModel.predict(features, number, config.units.length);
-    const fastBossId = config.units.find(id => adviceModel.isFastBoss(ENEMY_TYPES[id]));
-    const fastBoss = ENEMY_TYPES[fastBossId];
-    if (baseline === null || !fastBoss) return { baseline };
-
-    // The preview and advice use the same isolated battle, including live tower cooldowns.
-    const battle = createGame(true);
-    const placements = towers.filter(t => !t.dead).map(t => ({ c: t.c, r: t.r, id: t.type.id, cd: t.cd }));
-    const simulate = (waveConfig, candidate) => {
-      const added = candidate ? [{ c: candidate.c, r: candidate.r, id: candidate.type.id }] : [];
-      const cash = money - (candidate?.type.cost ?? 0);
-      battle.setup({ placements: [...placements, ...added], cash, health: lives });
-      return battle.run(number, waveConfig);
-    };
-    return { baseline, fastBoss, original: simulate(config), simulate };
+  function predictDeployment(number, { config, features }) {
+    return adviceModel.predict(features, number, config.units.length);
   }
 
   function forecastWave() {
@@ -818,80 +797,44 @@
     recommended = null;
     const number = wave + 1;
     const current = deploymentScenario(number, seedForNextWave()).current();
-    const { baseline, original } = assessCurrentDeployment(number, current);
-    const estimate = recordForecast(baseline, original);
+    const estimate = recordForecast(predictDeployment(number, current));
     syncDeploymentControls(`第 ${number} 波 · ${current.config.summary}（共 ${current.config.units.length} 只） · ${estimate}`);
   }
 
   function rankDeployments(number, seed) {
     const scenario = deploymentScenario(number, seed);
-    const { baseline, original, fastBoss, simulate } = assessCurrentDeployment(number, scenario.current());
+    const baseline = predictDeployment(number, scenario.current());
     if (baseline === null) return { baseline, best: null };
     const affordable = Object.values(TOWER_TYPES).filter(type => type.cost <= money);
     let best = null;
-    if (!affordable.length) return { baseline, original, best: null };
-    const shortlist = new Map();
-    const slowShortlist = [];
+    if (!affordable.length) return { baseline, best: null };
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const route = scenario.routeWith(c, r);
         if (!route) continue;
         for (const type of affordable) {
-          const { config, features } = scenario.candidate(c, r, type, route);
-          const prediction = adviceModel.predict(features, number, config.units.length);
-          if (prediction === null) continue;
-          const candidate = { c, r, type, prediction, config };
-          if (!best || prediction < best.prediction) {
-            best = candidate;
-          }
-          if (original) {
-            const top = shortlist.get(type.id) || [];
-            top.push(candidate);
-            top.sort((a, b) => a.prediction - b.prediction);
-            if (top.length > 3) top.pop();
-            shortlist.set(type.id, top);
-            if (type.slow) {
-              const bossPath = fastBoss.flying ? [SPAWN, BASE] : route;
-              const support = adviceModel.slowSupport(candidate, bossPath, towers, fastBoss.flying);
-              slowShortlist.push({ candidate, support });
-            }
+          const candidate = scenario.candidate(c, r, type, route);
+          const prediction = predictDeployment(number, candidate);
+          if (prediction !== null && (!best || prediction < best.prediction)) {
+            best = { c, r, type, prediction, config: candidate.config };
           }
         }
       }
     }
-    if (!original) return { baseline, best };
-    const candidates = new Set([...shortlist.values()].flat());
-    slowShortlist.sort((a, b) => b.support - a.support);
-    for (const { candidate } of slowShortlist.slice(0, 4)) candidates.add(candidate);
-    const simulatedBest = checkBossDeployments(candidates, original, simulate);
-    return { baseline, best: simulatedBest, original, fastBoss, mlpBest: best };
-  }
-
-  function checkBossDeployments(candidates, original, simulate) {
-    let best = null;
-    for (const candidate of candidates) {
-      const result = simulate(candidate.config, candidate);
-      if (result && result.leaked < (best?.result.leaked ?? original.leaked)) {
-        best = { ...candidate, result };
-      }
-    }
-    return best;
+    return { baseline, best };
   }
 
   function adviseDeployment() {
     if (over || running || paused) return;
     recommended = null;
     const number = wave + 1;
-    const { baseline, best, original, fastBoss } = rankDeployments(number, seedForNextWave());
-    const estimate = recordForecast(baseline, original);
+    const { baseline, best } = rankDeployments(number, seedForNextWave());
+    const estimate = recordForecast(baseline);
     if (baseline === null) {
       syncDeploymentControls('当前布局或波次超出模型范围，可点「预测下一波」查看阵容。');
     } else if (money < Math.min(...Object.values(TOWER_TYPES).map(type => type.cost))) {
       syncDeploymentControls(`${estimate}。金币不足，暂时无法部署新塔。`);
-    } else if (original && !best) {
-      const note = original.leaked === 0 ? '模拟中当前布防可守住这一波。' : '备选加塔方案未减少漏怪。';
-      syncDeploymentControls(`${fastBoss.name}来袭 · ${estimate}。${note}`);
-    } else if (!best || (!original && best.prediction + 0.25 >= baseline)) {
+    } else if (!best || best.prediction + 0.25 >= baseline) {
       syncDeploymentControls(`${estimate}。补一座塔的预估改善不足。`);
     } else {
       recommended = best;
@@ -900,12 +843,9 @@
       refreshDeck();
       refreshBrief();
       updateTip();
-      const improvement = original
-        ? `${fastBoss.name}来袭 · 整波模拟漏怪 ${original.leaked} → ${best.result.leaked} 只 · 其中 Boss ${original.bossLeaked} → ${best.result.bossLeaked} 只。`
-        : `预计漏怪 ${baseline.toFixed(1)} → ${best.prediction.toFixed(1)} 只。`;
       syncDeploymentControls(
         `第 ${number} 波 · ${best.type.name}（${best.type.cost} 金）· 第 ${best.r + 1} 行第 ${best.c + 1} 列\n` +
-        `${improvement}点击黄色格子部署。`,
+        `MLP 预计漏怪 ${baseline.toFixed(1)} → ${best.prediction.toFixed(1)} 只。点击黄色格子部署。`,
       );
     }
   }
@@ -1755,18 +1695,17 @@
     requestAnimationFrame(loop);
   }
   if (headless) {
-    const battle = {
+    window.TDSimulation = {
       board: { cols: COLS, rows: ROWS, spawn: SPAWN, base: BASE },
       setup: ({ placements, cash, health }) => {
         newGame();
         lives = health;
         money = cash + placements.reduce((sum, tile) => sum + TOWER_TYPES[tile.id].cost, 0);
-        for (const { c, r, id, cd = 0 } of placements) {
+        for (const { c, r, id } of placements) {
           selectedType = id;
           const before = towers.length;
           buildTower(c, r);
           if (towers.length === before) throw new Error('模拟布局有非法部署');
-          towers.at(-1).cd = cd;
         }
       },
       scenario: deploymentScenario,
@@ -1775,15 +1714,11 @@
         const initialLives = lives;
         beginWave(number, config);
         for (let i = 0; running && i < 16000; i++) update();
-        if (running) {
-          if (simulation) return null;
-          throw new Error('模拟波次超时');
-        }
+        if (running) throw new Error('模拟波次超时');
         return { leaked, bossLeaked, baseDamage: initialLives - lives, total: config.units.length };
       },
     };
-    if (!simulation) window.TDSimulation = battle;
-    return battle;
+    return;
   }
 
   // 先初始化状态，再构建炮塔面板：refreshDeck() 需要 towers 已是数组
