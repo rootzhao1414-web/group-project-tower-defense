@@ -2,10 +2,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function loadGame(withModel = false) {
+function loadGame(withModel = false, modelPath = path.join(__dirname, '..', 'deployment-model.js')) {
   const context = vm.createContext({ window: {}, Math });
   const files = ['design-assets.js', 'deployment-advice.js', 'game.js'];
-  if (withModel) files.unshift('deployment-model.js');
+  if (withModel) {
+    vm.runInContext(fs.readFileSync(modelPath, 'utf8'), context, { filename: modelPath });
+  }
   for (const file of files) {
     const source = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
     vm.runInContext(source, context, { filename: file });
@@ -81,21 +83,23 @@ function simulate(window, layout, tile) {
     cash: cash - cost,
     health,
   });
-  const { config, features } = game.scenario(number, waveSeed).current();
-  return { features, ...game.run(number, config) };
+  const { config, features, map } = game.scenario(number, waveSeed).current();
+  return { features, map, ...game.run(number, config) };
 }
 
 if (require.main === module) {
-  const output = path.join(__dirname, 'deployment.jsonl');
-  const count = Number(process.argv[2] || 1700);
+  const count = Number(process.argv[2] || 1100);
+  const seed = Number(process.argv[3] || 260624);
   if (!Number.isInteger(count) || count < 24) throw new Error('布局数须为至少 24 的整数');
+  if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) throw new Error('随机种子须为无符号 32 位整数');
+  const output = path.join(__dirname, `cnn-${seed}.jsonl`);
   const window = loadGame();
   const fd = fs.openSync(output, 'w');
   let rows = 0;
   try {
-    for (const layout of layouts(window, count, 260624)) {
+    for (const layout of layouts(window, count, seed)) {
       const examples = [null, ...layout.options].map(tile => JSON.stringify({
-        group: layout.i, baseline: !tile, ...simulate(window, layout, tile),
+        group: `${seed}:${layout.i}`, baseline: !tile, ...simulate(window, layout, tile),
       }));
       fs.writeSync(fd, examples.join('\n') + '\n');
       rows += examples.length;

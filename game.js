@@ -741,7 +741,7 @@
       const features = path && adviceModel.features({
         number, placements, path, airPath, cash, lives, config, enemyStats, tileSize: T,
       });
-      return { config, features };
+      return { config, features, map: path && adviceModel.encodeGrid(placements, path) };
     };
     return {
       current: () => extract(activeTowers, findPath(SPAWN.c, SPAWN.r), money),
@@ -771,12 +771,12 @@
   function clearRecommendation() {
     recommended = null;
     if (!headless && !running && !over) {
-      syncDeploymentControls('开波前可预览敌人，或让 MLP 建议加一座塔。');
+      syncDeploymentControls('开波前可预测漏怪，或查看部署建议。');
     }
   }
 
   function reportDeployment(fell) {
-    const prediction = forecastForWave === null ? '' : `MLP 预估漏怪 ${forecastForWave.toFixed(1)} 只 · `;
+    const prediction = forecastForWave === null ? '' : `模型预估漏怪 ${forecastForWave.toFixed(1)} 只 · `;
     const result = fell ? `基地陷落前漏怪 ${leaked} 只` : `实际漏怪 ${leaked} 只`;
     const bosses = bossLeaked ? `（含 Boss ${bossLeaked} 只）` : '';
     syncDeploymentControls(`第 ${wave} 波 · ${prediction}${result}${bosses}`);
@@ -785,11 +785,11 @@
 
   function recordForecast(prediction) {
     forecastForWave = prediction;
-    return prediction === null ? '当前布局或波次超出模型范围' : `MLP 预计漏怪 ${prediction.toFixed(1)} 只`;
+    return prediction === null ? '当前布局或波次超出模型范围' : `模型预计漏怪 ${prediction.toFixed(1)} 只`;
   }
 
-  function predictDeployment(number, { config, features }) {
-    return adviceModel.predict(features, number, config.units.length);
+  function predictDeployment(number, { config, features, map }) {
+    return adviceModel.predict(features, number, config.units.length, map);
   }
 
   function forecastWave() {
@@ -845,7 +845,7 @@
       updateTip();
       syncDeploymentControls(
         `第 ${number} 波 · ${best.type.name}（${best.type.cost} 金）· 第 ${best.r + 1} 行第 ${best.c + 1} 列\n` +
-        `MLP 预计漏怪 ${baseline.toFixed(1)} → ${best.prediction.toFixed(1)} 只。点击黄色格子部署。`,
+        `模型预计漏怪 ${baseline.toFixed(1)} → ${best.prediction.toFixed(1)} 只。点击黄色格子部署。`,
       );
     }
   }

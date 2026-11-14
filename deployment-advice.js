@@ -1,4 +1,4 @@
-/* Shared feature extraction and MLP inference for the game and offline training. */
+/* Shared feature extraction and neural network inference. */
 window.TDDeployment = (() => {
   'use strict';
 
@@ -6,6 +6,8 @@ window.TDDeployment = (() => {
   const towerIds = Object.keys(TOWER_TYPES);
   const enemyIds = Object.keys(ENEMY_TYPES);
   const MAX_WAVE = 24;
+  const GRID_ROWS = 9;
+  const GRID_COLS = 16;
 
   const isFastBoss = type => type?.boss && type.ratios?.speed >= 1.5;
 
@@ -102,10 +104,86 @@ window.TDDeployment = (() => {
     return input;
   }
 
-  function predict(input, wave, total) {
+  // Five tower masks and a route channel ordered from spawn to base.
+  function encodeGrid(placements, path) {
+    const planes = towerIds.map(() => []);
+    for (const { c, r, type } of placements) planes[towerIds.indexOf(type.id)].push(r * GRID_COLS + c);
+    planes.push(path.map(({ c, r }) => r * GRID_COLS + c));
+    return planes;
+  }
+
+  function convolve(input, rows, cols, layer) {
+    const outRows = Math.ceil(rows / layer.stride);
+    const outCols = Math.ceil(cols / layer.stride);
+    const area = rows * cols;
+    const outArea = outRows * outCols;
+    const inChannels = input.length / area;
+    const output = new Float32Array(layer.bias.length * outArea);
+    for (let oc = 0; oc < layer.bias.length; oc++) {
+      const kernel = layer.weights[oc];
+      for (let r = 0; r < outRows; r++) {
+        for (let c = 0; c < outCols; c++) {
+          let value = layer.bias[oc];
+          for (let ic = 0; ic < inChannels; ic++) {
+            for (let dr = 0; dr < 3; dr++) {
+              const sr = r * layer.stride + dr - 1;
+              if (sr < 0 || sr >= rows) continue;
+              for (let dc = 0; dc < 3; dc++) {
+                const sc = c * layer.stride + dc - 1;
+                if (sc >= 0 && sc < cols) {
+                  value += input[ic * area + sr * cols + sc] * kernel[ic * 9 + dr * 3 + dc];
+                }
+              }
+            }
+          }
+          output[oc * outArea + r * outCols + c] = Math.max(0, value);
+        }
+      }
+    }
+    return { output, rows: outRows, cols: outCols };
+  }
+
+  function gridEmbedding(planes, layers, pool) {
+    const area = GRID_ROWS * GRID_COLS;
+    let output = new Float32Array(planes.length * area);
+    for (const [channel, cells] of planes.entries()) {
+      for (const [index, cell] of cells.entries()) {
+        output[channel * area + cell] = channel === planes.length - 1
+          ? 1 + index / Math.max(1, cells.length - 1) : 1;
+      }
+    }
+    let rows = GRID_ROWS;
+    let cols = GRID_COLS;
+    for (const layer of layers) {
+      ({ output, rows, cols } = convolve(output, rows, cols, layer));
+    }
+    const result = [];
+    for (let channel = 0; channel < output.length / (rows * cols); channel++) {
+      for (let i = 0; i < pool[0]; i++) {
+        const r0 = Math.floor(i * rows / pool[0]);
+        const r1 = Math.ceil((i + 1) * rows / pool[0]);
+        for (let j = 0; j < pool[1]; j++) {
+          const c0 = Math.floor(j * cols / pool[1]);
+          const c1 = Math.ceil((j + 1) * cols / pool[1]);
+          let sum = 0;
+          for (let r = r0; r < r1; r++) {
+            for (let c = c0; c < c1; c++) sum += output[(channel * rows + r) * cols + c];
+          }
+          result.push(sum / ((r1 - r0) * (c1 - c0)));
+        }
+      }
+    }
+    return result;
+  }
+
+  function predict(input, wave, total, map) {
     const model = window.TDDeploymentModel;
     if (!input || !model || wave < 1 || wave > model.maxWave || input.length !== model.mean.length) return null;
     let activations = input.map((value, i) => (value - model.mean[i]) / model.scale[i]);
+    if (model.conv) {
+      if (map?.length !== model.channels) return null;
+      activations.push(...gridEmbedding(map, model.conv, model.pool));
+    }
     for (const [layerIndex, layer] of model.layers.entries()) {
       const last = layerIndex === model.layers.length - 1;
       activations = layer.weights.map((weights, output) => {
@@ -117,5 +195,5 @@ window.TDDeployment = (() => {
     return Math.max(0, Math.min(1, activations[0])) * total;
   }
 
-  return { seededRandom, features, predict, isFastBoss, maxWave: MAX_WAVE };
+  return { seededRandom, features, encodeGrid, predict, isFastBoss, maxWave: MAX_WAVE, GRID_ROWS, GRID_COLS };
 })();
