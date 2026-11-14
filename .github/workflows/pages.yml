@@ -45,9 +45,10 @@ jobs:
 
       - name: 收集要发布的作品文件
         run: |
-          # 只发布游戏本体，不把 README / .gitignore / .github 一起公开
+          # 站点仅部署游戏与许可说明；公开仓库仍可查看训练代码和文档
           mkdir -p _site
           cp index.html style.css design-assets.js deployment-model.js deployment-advice.js game.js _site/
+          cp LICENSE THIRD_PARTY_NOTICES.md _site/
           echo "将发布的文件："
           ls -lh _site/
 

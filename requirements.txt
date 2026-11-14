@@ -1,0 +1,4 @@
+# Verified training environment: Python 3.11.17 (CPU execution).
+numpy==2.4.6
+torch==2.14.1
+scikit-learn==1.9.1

@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "code_commit": "691debf",
+  "documentation_checked_on": "2026-11-14",
+  "provenance": {
+    "training_metrics": "Recorded outputs from the original full-data training runs; not retrained during documentation preparation.",
+    "deployment_metrics": "Rechecked by ml/evaluate-deployment.cjs on the retained model weights.",
+    "fingerprints": "SHA-256 of text after normalizing CRLF to LF, for platform-independent comparison."
+  },
+  "verified_environment": {
+    "python": "3.11.17",
+    "node": "24.16.0",
+    "numpy": "2.4.6",
+    "torch": "2.14.1",
+    "scikit-learn": "1.9.1",
+    "execution": "CPU"
+  },
+  "datasets": [
+    {
+      "file": "ml/cnn-260624.jsonl",
+      "rows": 19021,
+      "sha256": "56ccd46c40d64dbeaed5427fd261e7e36d0cff957b711ba82beaef4b34b76085",
+      "layout_attempts": 1000,
+      "seed": 260624
+    },
+    {
+      "file": "ml/cnn-270624.jsonl",
+      "rows": 19059,
+      "sha256": "5a507539bd6f01d67c29618b9c45614fcf30dc9950868be218a6e1e43d330466",
+      "layout_attempts": 1000,
+      "seed": 270624
+    },
+    {
+      "file": "ml/cnn-280624.jsonl",
+      "rows": 19161,
+      "sha256": "aa94ab03bdd44d6fe2f3f7a811acd5a0a824af7eba935b667c998d889e035a43",
+      "layout_attempts": 1000,
+      "seed": 280624
+    },
+    {
+      "file": "ml/cnn-290624.jsonl",
+      "rows": 18849,
+      "sha256": "7370758d20156a8ab0d4c0747828dd965be795815857f23a0b3eab0738431014",
+      "layout_attempts": 1000,
+      "seed": 290624
+    }
+  ],
+  "split": {
+    "total": 76090,
+    "train": 52508,
+    "validation": 8763,
+    "test": 14819,
+    "grouping": "starting tower layout plus wave number",
+    "test_group_fraction": 0.2,
+    "validation_fraction_of_remaining_groups": 0.15,
+    "test_seed": 42,
+    "validation_seed": 43
+  },
+  "training": {
+    "epochs": 60,
+    "torch_seed": 42,
+    "batch_size": 384,
+    "optimizer": "AdamW",
+    "lr": 0.0015,
+    "weight_decay": 0.0005,
+    "scheduler": "CosineAnnealingLR",
+    "eta_min": 0.00015,
+    "loss": "SmoothL1 on (output * total - leaked) / sqrt(total)",
+    "loss_beta": 0.45,
+    "numeric_features": 67,
+    "map_shape": [
+      6,
+      9,
+      16
+    ]
+  },
+  "cnn_mlp": {
+    "metrics": {
+      "testMAE": 1.308634638786316,
+      "fastBossMAE": 1.3072561025619507,
+      "sampledAdviceLeaks": 11.258321762084961,
+      "sampledRandomLeaks": 13.509916305541992
+    },
+    "selected_epoch": 30,
+    "validation_mae_rounded": 1.416,
+    "model_sha256": "d2e578ec9f62cf104f5514f00a01a930579213be7eab1a02a820a77e7b34a36e"
+  },
+  "mlp_control": {
+    "metrics": {
+      "testMAE": 1.579162836074829,
+      "fastBossMAE": 1.6767284870147705,
+      "sampledAdviceLeaks": 11.32889461517334,
+      "sampledRandomLeaks": 13.509916305541992
+    },
+    "selected_epoch": 25,
+    "validation_mae_rounded": 1.581,
+    "model_sha256": "cf7718844062fe6e030b7dabd1e001a3ec29f24599954c38e1d9be5d3e2c2972"
+  },
+  "deployment": {
+    "layout_attempts": 96,
+    "evaluated_layouts": 95,
+    "layout_seed": 261115,
+    "random_choice_seed": 17,
+    "mean_leaks_rounded": {
+      "keep": 13.97,
+      "random": 11.95,
+      "mlp": 9.59,
+      "cnn_mlp": 9.46
+    },
+    "vs_keep": {
+      "cnn_mlp": {
+        "improved": 67,
+        "worse": 2,
+        "same": 26
+      },
+      "mlp": {
+        "improved": 67,
+        "worse": 2,
+        "same": 26
+      }
+    },
+    "random_policy": "Uniform choice from generator-sampled affordable legal single-tower options. Model scores all affordable legal single-tower options and may keep the original layout. Spending is not matched."
+  },
+  "fast_boss_deployment": {
+    "layout_attempts": 384,
+    "evaluated_layouts": 47,
+    "layout_seed": 261115,
+    "overlaps_general_deployment_suite": true,
+    "mean_leaks_rounded": {
+      "keep": 15.06,
+      "random": 12.17,
+      "cnn_mlp": 9.55
+    },
+    "total_leaks": {
+      "keep": 708,
+      "cnn_mlp": 449
+    },
+    "base_damage": {
+      "keep": 802,
+      "cnn_mlp": 539
+    },
+    "boss_leaks": {
+      "keep": 47,
+      "cnn_mlp": 45
+    },
+    "frost_recommendations": 6,
+    "vs_keep": {
+      "improved": 26,
+      "worse": 0,
+      "same": 21
+    }
+  },
+  "example_data": {
+    "file": "ml/examples/sample.jsonl",
+    "rows": 24,
+    "groups": 8,
+    "selection": "First eight groups with at least two candidates in cnn-260624.jsonl, baseline plus first two candidates per group. Smoke testing only.",
+    "sha256": "39c357687e70ad599f335d179ed404bd561db8c00d6ff9c8947d0be16bd89fb7"
+  },
+  "limitations": [
+    "Offline generated scenarios, not measured player sessions.",
+    "One fixed training seed and split; no confidence interval.",
+    "Single-tower recommendations, no long-horizon economy objective.",
+    "Wave range 1-24 and an open ground route.",
+    "Whole-wave leak regression is not Boss interception classification."
+  ]
+}

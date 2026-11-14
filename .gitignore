@@ -137,3 +137,18 @@ dist
 
 # Local model training data
 /ml/*.jsonl
+
+# Python environments and generated training artifacts
+__pycache__/
+*.py[cod]
+/.venv/
+/venv/
+/ml/outputs/
+/ml/checkpoints/
+
+# Local Pages staging directory
+/_site/
+
+# Environment-specific secrets (keep a public example if added later)
+.env.*
+!.env.example
