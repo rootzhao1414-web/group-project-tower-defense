@@ -1,0 +1,15 @@
+{
+  "name": "tower-defense-ai-vision",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node auto-deploy.mjs",
+    "capture-template": "node auto-deploy.mjs --capture-template"
+  },
+  "dependencies": {
+    "playwright": "1.62.1",
+    "pngjs": "7.0.0"
+  }
+}

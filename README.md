@@ -4,6 +4,14 @@
 
 游戏使用原生 JavaScript、Canvas 和 CSS，双击 `index.html` 即可运行。仓库包含训练好的模型，体验游戏无需安装 Python、Node.js 或下载模型。
 
+## 视觉自动部署
+
+在装有 Microsoft Edge 和 Node.js 20 或以上版本的 Windows 电脑上，下载并解压项目，在项目目录打开终端，运行 `npm ci` 安装依赖。双击 `launch-auto-deploy.cmd` 或运行 `npm start` 打开游戏。
+
+在开波前点击敌情雷达里的「自动部署」。本地助手先通过模板匹配点击「部署建议」，再从棋盘图像中用 HSV 和虚线形状定位推荐格，点击格子中心。一次操作最多建一座塔；建塔成功后，雷达显示已部署炮塔及预计漏怪数。
+
+普通浏览器版可直接打开 `index.html` 体验手动部署。「自动部署」入口由本地助手启动。识别阈值、维护步骤和故障排查见[视觉自动部署说明](docs/visual-auto-deploy.md)。
+
 ## 打开与操作
 
 下载并解压项目后，双击 `index.html`。也可以在项目目录启动本地服务器：
@@ -82,6 +90,9 @@ design-assets.js                   炮塔、敌人、克制、经济、图标与
 game.js                            游戏规则、雷达与离线游戏接口
 deployment-advice.js               特征编码、CNN/MLP 前向推理
 deployment-model.js                训练好的模型权重与标准化参数
+auto-deploy.mjs / vision.mjs        本地浏览器操作与图像识别
+launch-auto-deploy.cmd              Windows 自动部署启动器
+suggest_btn.png                     从游戏雷达截取的按钮模板
 ml/simulate-deployment.cjs          批量生成带标签的游戏记录
 ml/train-deployment.py             训练、测试与导出模型
 ml/evaluate-deployment.cjs          用额外布局检验部署建议
