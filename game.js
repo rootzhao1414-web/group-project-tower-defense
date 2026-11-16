@@ -78,6 +78,8 @@
   let seenBossAttack;    // boss 攻击方式的首次提示已播过
   let money;
   let lives;
+  let kills;            // 本局累计击杀（v4 能力分口径）
+  let spent;            // 本局累计建塔花费（v4 能力分口径）
   let wave;
   let running;
   let over;
@@ -263,6 +265,7 @@
     if (dmg > 0) addParticles(e.x, e.y, e.type.color, 2);
     if (e.hp <= 0) {
       e.dead = true;
+      kills++;
       money += e.type.reward;
       addParticles(e.x, e.y, e.type.color, e.type.boss ? 26 : 8);
       if (e.type.boss) msg(`☠ ${e.type.name}倒下了！+${e.type.reward}`);
@@ -529,6 +532,7 @@
     if (money < type.cost) { msg(`金币不够，需要 ${type.cost}`); return; }
 
     money -= type.cost;
+    spent += type.cost;
     grid[r][c] = 1;
     pathDirty = true;
 
@@ -1639,6 +1643,8 @@
     seenBossAttack = {};
     money = START_MONEY;
     lives = START_LIVES;
+    kills = 0;
+    spent = 0;
     wave = 0;
     running = false;
     over = false;
@@ -1715,7 +1721,7 @@
         beginWave(number, config);
         for (let i = 0; running && i < 16000; i++) update();
         if (running) throw new Error('模拟波次超时');
-        return { leaked, bossLeaked, baseDamage: initialLives - lives, total: config.units.length };
+        return { leaked, bossLeaked, baseDamage: initialLives - lives, total: config.units.length, kills, spent };
       },
     };
     return;
@@ -1732,7 +1738,7 @@
     window.__td = {
       spawnEnemy,
       stats: id => enemyStats(ENEMY_TYPES[id] || {}, 1, 1),
-      state: () => ({ wave, money, lives, towers: towers.length, enemies: enemies.length, marks, shake }),
+      state: () => ({ wave, money, lives, towers: towers.length, enemies: enemies.length, marks, shake, kills, spent }),
       setWave: w => { wave = w; },
       // 把刚生成的敌人瞬移到第一座塔旁边并强制进入拆塔状态，用来快速验证攻击表现
       poke: id => {
